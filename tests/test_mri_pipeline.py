@@ -18,6 +18,7 @@ class PipelineTests(unittest.TestCase):
         self.patches = [
             mock.patch.object(pipeline, "MRI", self.base / "MRI"),
             mock.patch.object(pipeline, "SUBJECTS", self.base / "work" / "freesurfer"),
+            mock.patch.object(pipeline, "PROVENANCE", self.base / "work" / "provenance"),
             mock.patch.object(pipeline, "RESULTS", self.base / "results")
         ]
         for patch in self.patches:
@@ -110,6 +111,102 @@ class PipelineTests(unittest.TestCase):
                 pipeline.reconstruct(study)
         argv = sh.call_args.args[0]
         self.assertIn("-i", argv)
+
+    def test_fresh_recon_import_does_not_precreate_subject_dir(self):
+        study = self.make_study()
+        (study / "T1.nii.gz").write_bytes(b"synthetic volume")
+        subject = pipeline.subject_dir(study)
+        called = []
+
+        def fake_docker(args):
+            called.append(args)
+            self.assertFalse(
+                subject.exists(),
+                "FreeSurfer must create the subject dir when -i is specified",
+            )
+            self.assertIn("-i", args)
+
+        with mock.patch.object(pipeline, "check_license"), \
+             mock.patch.object(pipeline, "check_docker"), \
+             mock.patch.object(pipeline, "sh", side_effect=fake_docker):
+            with self.assertRaisesRegex(pipeline.PipelineError, "recon-all.done"):
+                pipeline.reconstruct(study)
+        self.assertEqual(len(called), 1)
+        self.assertTrue(pipeline.provenance_path(study).is_file())
+        self.assertFalse(subject.exists())
+
+    def test_recover_exact_metadata_only_stub_not_scan_data(self):
+        study = self.make_study()
+        image = study / "T1.nii.gz"
+        image.write_bytes(b"synthetic")
+        subject = pipeline.subject_dir(study)
+        subject.mkdir(parents=True)
+        (subject / "pacni-input.json").write_text(json.dumps({
+            "signature": pipeline.signature(study, image),
+            "fs_image": pipeline.FS_IMAGE,
+        }))
+        with mock.patch.object(pipeline, "check_license"), \
+             mock.patch.object(pipeline, "check_docker"), \
+             mock.patch.object(pipeline, "sh") as docker:
+            with self.assertRaisesRegex(pipeline.PipelineError, "recon-all.done"):
+                pipeline.reconstruct(study)
+        self.assertIn("-i", docker.call_args.args[0])
+        self.assertFalse(subject.exists())
+        self.assertTrue(pipeline.provenance_path(study).is_file())
+
+    def test_resume_existing_freesurfer_volume_omits_i(self):
+        study = self.make_study()
+        image = study / "T1.nii.gz"
+        image.write_bytes(b"synthetic")
+        subject = pipeline.subject_dir(study)
+        orig = subject / "mri" / "orig"
+        orig.mkdir(parents=True)
+        (orig / "001.mgz").write_bytes(b"not an actual reconstruction")
+        (subject / "pacni-input.json").write_text(json.dumps({
+            "signature": pipeline.signature(study, image),
+            "fs_image": pipeline.FS_IMAGE,
+        }))
+        with mock.patch.object(pipeline, "check_license"), \
+             mock.patch.object(pipeline, "check_docker"), \
+             mock.patch.object(pipeline, "sh") as docker:
+            with self.assertRaisesRegex(pipeline.PipelineError, "recon-all.done"):
+                pipeline.reconstruct(study)
+        self.assertNotIn("-i", docker.call_args.args[0])
+        self.assertTrue((orig / "001.mgz").exists())
+
+    def test_never_delete_partial_unknown_reconstruction(self):
+        study = self.make_study()
+        image = study / "T1.nii.gz"
+        image.write_bytes(b"synthetic")
+        subject = pipeline.subject_dir(study)
+        subject.mkdir(parents=True)
+        (subject / "pacni-input.json").write_text(json.dumps({
+            "signature": pipeline.signature(study, image),
+            "fs_image": pipeline.FS_IMAGE,
+        }))
+        protected = subject / "recon-all.log"
+        protected.write_text("precious partial information")
+        with mock.patch.object(pipeline, "check_license"), \
+             mock.patch.object(pipeline, "check_docker"), \
+             mock.patch.object(pipeline, "sh") as docker:
+            with self.assertRaisesRegex(
+                pipeline.PipelineError, "mri/orig/001.mgz is absent"
+            ):
+                pipeline.reconstruct(study)
+        docker.assert_not_called()
+        self.assertEqual(protected.read_text(), "precious partial information")
+        self.assertTrue((subject / "pacni-input.json").exists())
+
+    def test_provenance_outside_subject_blocks_input_changes(self):
+        study = self.make_study()
+        image = study / "T1.nii.gz"
+        image.write_bytes(b"original")
+        meta = pipeline.provenance(study, image)
+        pipeline.record_provenance(study, image, meta)
+        self.assertFalse(pipeline.subject_dir(study).exists())
+        image.write_bytes(b"updated")
+        with self.assertRaisesRegex(pipeline.PipelineError, "MRI input"):
+            pipeline.provenance(study, image)
 
     def test_cross_year_comparability_is_explicitly_uncertain(self):
         one = self.make_study("2024")
