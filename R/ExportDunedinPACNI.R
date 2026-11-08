@@ -19,7 +19,7 @@
 #'     confidence in the scores. Also bear in mind, the Dunedin Study is a cohort of 45-year-olds, so missing ROIs (i.e. imputed ROIs) may have
 #'     more dramatic effects in datasets that differ substantially in age from the Dunedin Study members.
 #'
-#'     This command will throw an error if you are missing more than >20 percent of the ROIs needed for the DunedinPACNI algorithm
+#'     This command will throw an error if you are missing 20 percent or more of the ROIs needed for the DunedinPACNI algorithm
 #' 
 #' @return The output of this function will be a data.frame with DunedinPACNI scores for your dataset. This function will also automatically save this object to an .Rdata file labeled:
 #' 
@@ -81,12 +81,23 @@ ExportDunedinPACNI <- function(data,
     # fix punctuation
     names(dunedin_dk_gwr_means) <- gsub("[-.]", "", names(dunedin_dk_gwr_means))
     
-    ROIs_to_impute <- dunedin_dk_gwr_means[which(match(names(dunedin_dk_gwr_means), missing_ROIs, nomatch = 0) > 0)]
-    ROIs_to_impute_df <- t(data.frame(ROIs_to_impute))
-    ROIs_to_impute_rep <- ROIs_to_impute_df[rep(seq_len(nrow(ROIs_to_impute_df)), nrow(data)), ]
-    rownames(ROIs_to_impute_rep) <- NULL
-    
-    data <- cbind(data, ROIs_to_impute_rep)
+    # Imputation is explicit and must not silently add unknown or existing ROIs.
+    missing_ROIs <- unique(missing_ROIs)
+    unknown_ROIs <- setdiff(missing_ROIs, names(dunedin_dk_gwr_means))
+    if (length(unknown_ROIs) > 0) {
+      stop(paste("Unknown missing ROI(s):", paste(unknown_ROIs, collapse = ", ")))
+    }
+    already_present <- intersect(missing_ROIs, names(data))
+    if (length(already_present) > 0) {
+      stop(paste("Cannot impute existing ROI(s):", paste(already_present, collapse = ", ")))
+    }
+    for (roi in missing_ROIs) {
+      mean_value <- as.numeric(dunedin_dk_gwr_means[[roi]])
+      if (length(mean_value) != 1 || !is.finite(mean_value)) {
+        stop(paste("Invalid reference mean for ROI:", roi))
+      }
+      data[[roi]] <- rep(mean_value, nrow(data))
+    }
     
     # reorder columns with imputed ROIs
     data <- data[,order(colnames(data))]
@@ -169,17 +180,34 @@ ExportDunedinPACNI <- function(data,
            -make sure the names of your ROIs from LoadFreeSurferStats() differ from the names of Dunedin ROIs')
   }
   
-  # loop through participants and apply the weights to each person's brain features to yield an estimate of their PACNI score
-  x<-1
-  pb <- progress_bar$new(format = "[:bar] Estimating DunedinPACNI in :current/:total (:percent), participants. eta: :eta", total = nrow(data))
-  for (s in 1:nrow(data)){
-    pb$tick()
-    Sys.sleep(1 / 100)
-    suppressWarnings({
-      data$pacni[x] <- sum(as.numeric(data[s,])[1:c(ncol(data)-2)]*as.numeric(coefs)[2:length(coefs)], coefs[1], na.rm=T)
-    })
-    x<-x+1
+  # Strict scoring: do not use na.rm=TRUE, which silently drops
+  # missing inputs with nonzero model coefficients.
+  if (nrow(data) < 1) stop("No participants to score")
+  if (anyDuplicated(data$ID)) stop("Participant IDs must be unique")
+  if (any(is.na(data$ID)) || any(!nzchar(as.character(data$ID)))) {
+    stop("Participant IDs must be nonempty")
   }
+  selected_ROIs <- names(coefs)[-1][as.numeric(coefs[-1]) != 0]
+  if (!all(selected_ROIs %in% colnames(data))) {
+    stop("Required model ROIs are missing")
+  }
+  features <- data[,selected_ROIs, drop = FALSE]
+  for (roi in selected_ROIs) {
+    if (!is.numeric(features[[roi]])) {
+      features[[roi]] <- suppressWarnings(as.numeric(as.character(features[[roi]])))
+    }
+    if (any(!is.finite(features[[roi]]))) {
+      stop(paste("Missing, nonnumeric or non-finite required ROI:", roi))
+    }
+  }
+  weights <- as.numeric(coefs[selected_ROIs])
+  intercept <- as.numeric(coefs[1])
+  if (length(intercept) != 1 || !is.finite(intercept) ||
+      any(!is.finite(weights))) {
+    stop("Invalid DunedinPACNI coefficients")
+  }
+  data$pacni <- as.vector(as.matrix(features) %*% weights + intercept)
+  if (any(!is.finite(data$pacni))) stop("Non-finite DunedinPACNI scores")
   df_pacni <- data[,c('ID', 'pacni')]
   
   # save out

@@ -206,7 +206,7 @@ LoadFreeSurferStats <- function(fsdir,
       if (ncol(data_temp) == ncol(data)){
         data[y,] <- data_temp[2,]
       } else if (ncol(data_temp) < ncol(data)){
-        data[y,] <- c(sub, rep(NA, 319))
+        data[y,] <- c(sub, rep(NA, ncol(data) - 1))
         print(paste0('sub ', paste0(sub), ' missing some ROIs'))
       }
       y <- y+1

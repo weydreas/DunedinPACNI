@@ -115,7 +115,7 @@ Where `outdir` is the path to the directory where you want to save DunedinPACNI 
 ### What if I am missing gray-white signal intensity ratio measures?
 DunedinPACNI is valid with or without gray-white signal intensity ratio measures. You can choose which version you want to use based on your data availability and preferences.
 
-To estimate DunedinPACNI without gray-white signal intensity ratio, simly set the `gwr_missing` option to `TRUE` for both `LoadFreeSurferStats` and/or `ExportDuinedinPACNI`. For example, if you are reading FreeSurfer data from the full `recon-all` output, run:
+To estimate DunedinPACNI without gray-white signal intensity ratio, simly set the `missing_gwr` option to `TRUE` for both `LoadFreeSurferStats` and/or `ExportDuinedinPACNI`. For example, if you are reading FreeSurfer data from the full `recon-all` output, run:
 ```
 LoadFreeSurferStats(fsdir = '<YOUR FREESURFER SUBJECTS DIRECTORY>', 
                     sublist = '<YOUR WORKING DIRECTORY>/sublist.csv',
@@ -130,7 +130,7 @@ ExportDunedinPACNI(data = df,
 ```
 
 ### What if I am missing estimates for some ROIs?
-You may have missing data from certain ROIs because of low data quality or lack of availabiliy. If so, we allow users to impute the average score from the Dunedin Study MRI dataset. Each missing ROI will slightly reduce the accuracy of resulting DunedinPACNI scores. Because the same value is being imputed for all subjects, imputed ROIs should have a uniform effect on DunedinPACNI scores in your sample, to avoid affecting within-group comparisons. If you are missing >20% of the ROIs included in the DunedinPACNI algorithm, we think that is too much missingness to estimate DunedinPACNI and `ExportDunedinPACNI` will throw an error.
+You may have missing data from certain ROIs because of low data quality or lack of availabiliy. If so, we allow users to impute the average score from the Dunedin Study MRI dataset. Each missing ROI will slightly reduce the accuracy of resulting DunedinPACNI scores. Because the same value is being imputed for all subjects, imputed ROIs should have a uniform effect on DunedinPACNI scores in your sample, to avoid affecting within-group comparisons. If you are missing 20% or more of the ROIs included in the DunedinPACNI algorithm, we think that is too much missingness to estimate DunedinPACNI and `ExportDunedinPACNI` will throw an error.
 
 If you have a lot of missingness, we would encourage you to consider [more sophisticated approaches to imputation](https://link.springer.com/article/10.1007/s12021-019-09426-x). Ultimately, however, how you handle missing data is up to your preferences, the specifics of your data, and your research question.
 
@@ -158,3 +158,199 @@ Current package version 0.0.0.1
 This package was built using R version 4.3.2 and uses tools from the R package `progress` (version 1.2.3).
 
 This package was built by Ethan Whitman (ethan.whitman@duke.edu).
+# Windows local MRI processing (Biodata launcher)
+
+The pipeline below processes MRI **locally**. Patient images, reconstructed brain data,
+FreeSurfer license, and DunedinPACNI results are ignored by Git.
+
+## One-time setup
+
+1. Clone this fork on Windows 11, with Python 3 and Docker Desktop in Linux/WSL2 mode.
+2. Open start.cmd and choose action 9 to obtain/install a FreeSurfer license.
+   The one-time wizard opens official registration and imports the emailed
+   license from Downloads, a file path or pasted license-only text.
+3. Create a separate directory for each MRI study:
+
+    MRI/2024-08-02/T1.nii.gz
+    MRI/2026-06-01/T1.nii.gz
+
+Each study can instead contain a single other NIfTI/MGZ image, or a dedicated
+MRI/2024-08-02/T1/ directory of DICOM images from **one 3D T1 series**.
+If a scan folder contains multiple NIfTI volumes, use the exact filename
+T1.nii.gz (T1.nii or T1.mgz also work) to select the correct volume.
+DICOM folders must never mix distinct SeriesInstanceUIDs; this launcher
+does not automatically check DICOM series metadata.
+
+## Interactive launcher
+
+Double-click start.cmd (or run it from PowerShell). Select an MRI study.
+The PowerShell menu has numbered actions:
+
+1. **DICOM import:** recursively find the series in MRI/<study>/SE000000,
+   SE000002 and any other nested folders, convert each with dcm2niix,
+   show sequence names/resolution and ask you to pick and confirm a plausible
+   anatomical 3D T1 series. It does not manufacture T1 from FLAIR or T2.
+2. Preflight: Docker, license and selected 3D T1.
+3. FreeSurfer reconstruction (resume supported if input has not changed).
+4. Structural quality gate: completion and region statistics.
+5. DunedinPACNI calculation through a local R container.
+6. Full pipeline: automatically request DICOM import when T1 is missing,
+   then FreeSurfer, structural QC and DunedinPACNI.
+7. List all detected studies and their processing statuses.
+8. Compare acquisition metadata across scans (where provided).
+9. Set up or check a personal FreeSurfer license (one-time).
+
+The first run downloads the pinned freesurfer/freesurfer:7.4.1 Docker image and
+builds a local R 4.3.2 image using the code in this fork. The original model
+was developed using FreeSurfer 6.0. To compare MRI dates, the images must be
+processed with **the same version** and a comparable preprocessing protocol.
+Change the FreeSurfer image only intentionally via the PACNI_FS_IMAGE environment
+variable. The software refuses to reuse existing reconstruction outputs when
+the input or selected FreeSurfer image differs from its provenance.
+
+Outputs appear in results/<subject-id>/pacni.csv, qc.json and run.json.
+When gray/white ratio output is unavailable, the official no-GWR coefficients
+are used rather than wholesale GWR imputation.
+
+**Limitations:** The automated QC gate verifies only structural output files;
+it does not review brain boundaries, surfaces or segmentation visually.
+Every score is marked **provisional** until visual FreeSurfer QC by a qualified
+reviewer. Cross-scanner differences and processing/version effects can mimic
+longitudinal changes; the score is a research phenotype, not a diagnosis.
+
+For CLI automation, run:
+
+    py -3 scripts/mri_pipeline.py list
+    py -3 scripts/mri_pipeline.py all 2024-08-02
+    py -3 scripts/mri_pipeline.py qc 2024-08-02
+
+Tests without MRI or Docker: python -m unittest discover -s tests -v
+
+## Optional cross-year comparability metadata
+
+To compare MRI studies, place scan.json beside T1.nii.gz in each study
+folder. Its fields are scanner_model (string), field_strength_t (number),
+sequence (string) and voxel_size_mm (three-number array). Example:
+
+    {"scanner_model":"GE Signa Architect","field_strength_t":3,
+     "sequence":"3D MPRAGE","voxel_size_mm":[1,1,1]}
+
+Choose menu action 8. The results/comparability.json file reports differences
+as review_required, consistent declared metadata as metadata_consistent_not_validated,
+or insufficient_metadata if source metadata are absent. It also compares
+recorded FreeSurfer image tags across processed scans. Declared consistency
+is not proof of matching image quality or biological comparability.
+
+
+## Installing the DICOM converter on Windows
+
+The importer requires the open-source program dcm2niix. No Python imaging
+packages, R, or FreeSurfer are needed for the **import step itself**.
+
+In PowerShell, open this repository directory and run:
+
+    New-Item -ItemType Directory -Force .\tools | Out-Null
+    Invoke-WebRequest 'https://github.com/rordenlab/dcm2niix/releases/latest/download/dcm2niix_win.zip' -OutFile "$env:TEMP\dcm2niix_win.zip"
+    Expand-Archive "$env:TEMP\dcm2niix_win.zip" -DestinationPath .\tools -Force
+    Get-ChildItem .\tools -Recurse -Filter dcm2niix.exe
+
+If the final command finds dcm2niix.exe, the menu will locate it automatically.
+Alternatively, put dcm2niix on PATH or set PACNI_DCM2NIIX to the executable
+path. The converter's Windows binaries are released at
+https://github.com/rordenlab/dcm2niix/releases .
+
+**Important:** dcm2niix performs DICOM to NIfTI format conversion. A DICOM
+dataset containing only T2, FLAIR or other contrast modalities cannot be
+converted into the actual T1-weighted acquisition expected by PACNI.
+
+## Importing nested DICOM directories
+
+Original data may be structured like this:
+
+    MRI/
+      2015.07 MRI Brain/
+        SE000000/
+          IM0001.dcm
+        SE000002/
+          IM0001.dcm
+        SE000013/
+          IM0001.dcm
+
+Run start.cmd, choose the study and press **1** to convert. The importer
+calls dcm2niix with -d 9 to search nested directories, -b y to preserve
+BIDS sidecar metadata and -ba y to anonymize JSON sidecars. All converted
+series are retained in work/imports/<study-id>/converted, together with a
+series-manifest.json identifying likely T1, excluded FLAIR/T2 and uncertain
+images. Series metadata and voxel sizes are inspected before any selection.
+Only T1-labeled, 3D, single-volume NIfTI-1 images with voxel dimensions no
+greater than 2 mm can be selected automatically. Those tests are a *screening
+rule*, not proof that an image meets all PACNI acquisition/QC requirements.
+
+You must choose the series number and type YES after reviewing that it is
+an anatomical T1 volume. Otherwise the importer does not create the input.
+The selected image is copied to MRI/<study>/T1.nii.gz, with T1.json,
+pacni-import.json and optional scan.json acquisition metadata alongside it.
+Original DICOMs are never moved or changed. If no plausible T1 is found,
+the program stops, keeps converted files for inspection, and does not
+invent a T1 volume. For uncertain series use 3D Slicer to inspect anatomy.
+
+To run just the conversion from PowerShell:
+
+    py -3 scripts/dicom_import.py "2015.07 MRI Brain"
+
+The converted T1 can then be processed using menu actions 2-6. The complete
+pipeline action 6 also invokes conversion when T1 is not yet available.
+Scan contents, conversion outputs and FreeSurfer licenses remain in Git-ignored
+local directories.
+
+For an existing checkout of the PR branch, update the menu and importer with:
+
+    git pull
+
+Then run .\start.cmd again.
+
+## FreeSurfer license — one-time Windows wizard
+
+FreeSurfer requires a **free personal license** issued after the user accepts
+the terms on its official registration page:
+https://surfer.nmr.mgh.harvard.edu/registration.html
+There is no automatic license generator or registration bypass. The emailed
+license text/file is reused for subsequent MRI scans.
+
+From start.cmd, choose an MRI and select **menu action 9**. When action 2
+(preflight), action 3 (recon-all) or action 6 (full pipeline) is used without
+an installed license, the same wizard starts automatically.
+
+The wizard:
+
+1. Checks config/license.txt; an existing plausible license is left unchanged.
+2. Searches Downloads, Desktop and common home paths for license*.txt and an
+   existing FS_LICENSE environment path. It displays only file paths, not
+   the contents, and offers numbered import choices.
+3. Can open the official registration page in the default browser. Fill out
+   the official form and download the emailed license file, or copy the
+   license-only lines from the message.
+4. Installs a selected file or pasted lines in config/license.txt once.
+   The file contents are never sent over the network by the program.
+5. Only checks structural plausibility (text, first line email, multi-line),
+   not actual validity with FreeSurfer. FreeSurfer itself validates the key
+   when it is used in a Docker container.
+
+If you already have a license.txt, simply choose action 9 and import it.
+The wizard supports [P] for a full local file path or [E] to paste the
+license-only text received by email. Never paste a whole email thread.
+The registration step must be completed by the user; the wizard cannot
+agree to the license terms on the user's behalf.
+
+The license and any temporary installation files remain under the
+Git-ignored config/ directory. The Docker build context also excludes
+config/. The license is mounted read-only for recon-all and **is not
+baked into the Docker image**.
+
+Advanced commands (optional):
+
+    py -3 scripts/license_setup.py setup
+    py -3 scripts/license_setup.py status
+
+If you plan to use FreeSurfer in a commercial Biodata product or on clients'
+data, independently review the applicable FreeSurfer license terms first.
