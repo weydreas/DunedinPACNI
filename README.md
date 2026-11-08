@@ -166,8 +166,9 @@ FreeSurfer license, and DunedinPACNI results are ignored by Git.
 ## One-time setup
 
 1. Clone this fork on Windows 11, with Python 3 and Docker Desktop in Linux/WSL2 mode.
-2. Request a FreeSurfer license from https://surfer.nmr.mgh.harvard.edu/registration.html
-   and save it in config/license.txt. Never commit this file.
+2. Open start.cmd and choose action 9 to obtain/install a FreeSurfer license.
+   The one-time wizard opens official registration and imports the emailed
+   license from Downloads, a file path or pasted license-only text.
 3. Create a separate directory for each MRI study:
 
     MRI/2024-08-02/T1.nii.gz
