@@ -137,6 +137,7 @@ def reconstruct(study):
         print("FreeSurfer already completed; reusing verified output.")
         return
     was_started = subject_dir(study).is_dir()
+    already_imported = (subject_dir(study) / "mri" / "orig" / "001.mgz").is_file()
     SUBJECTS.mkdir(parents=True, exist_ok=True)
     subject_dir(study).mkdir(exist_ok=True)
     info = subject_dir(study) / "pacni-input.json"
@@ -153,7 +154,8 @@ def reconstruct(study):
         "-e", "SUBJECTS_DIR=/subjects", "-e", "FS_LICENSE=/opt/pacni-license.txt",
         FS_IMAGE, "recon-all", "-sd", "/subjects", "-s", subject_id(study)
     ]
-    if not was_started:
+    if not was_started or not already_imported:
+        # Import can be missing if a prior run failed before its first MRI step.
         args.extend(["-i", "/input/" + image.relative_to(study).as_posix()])
     args.extend(["-all", "-parallel", "-openmp", str(min(os.cpu_count() or 2, 8))])
     sh(args)
