@@ -45,6 +45,7 @@ while ($true) {
         Write-Host '4. Stage 3: DunedinPACNI score'
         Write-Host '5. Full pipeline (1 -> 2 -> 3)'
         Write-Host '6. Show study statuses'
+        Write-Host '7. Compare acquisition metadata across years'
         Write-Host '0. Back'
         $action = Read-Host 'Choose action'
         if ($action -eq '0') { break }
@@ -55,6 +56,7 @@ while ($true) {
             '4' { Invoke-Pipeline 'score' $Study }
             '5' { Invoke-Pipeline 'all' $Study }
             '6' { Invoke-Pipeline 'list' $Study }
+            '7' { Invoke-Pipeline 'compare' $Study }
         }
     }
 }
