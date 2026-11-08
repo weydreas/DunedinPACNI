@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MRI = ROOT / "MRI"
 SUBJECTS = ROOT / "work" / "freesurfer"
+PROVENANCE = ROOT / "work" / "provenance"
 RESULTS = ROOT / "results"
 LICENSE = ROOT / "config" / "license.txt"
 FS_IMAGE = os.environ.get("PACNI_FS_IMAGE", "freesurfer/freesurfer:7.4.1")
@@ -111,17 +112,77 @@ def subject_dir(study):
     return SUBJECTS / subject_id(study)
 
 
+def provenance_path(study):
+    """Store pipeline input provenance OUTSIDE FreeSurfer-managed subject dirs."""
+    return PROVENANCE / (subject_id(study) + ".json")
+
+
 def provenance(study, image):
     folder = subject_dir(study)
-    metadata = folder / "pacni-input.json"
+    if folder.is_symlink():
+        raise PipelineError("Refusing to reuse a symlinked FreeSurfer subject directory")
     wanted = {"signature": signature(study, image), "fs_image": FS_IMAGE}
-    if metadata.exists():
-        found = json.loads(metadata.read_text(encoding="utf-8"))
-        if any(found.get(k) != v for k, v in wanted.items()):
-            raise PipelineError("MRI input or FreeSurfer version changed: use a fresh scan folder")
-    elif folder.exists():
-        raise PipelineError("FreeSurfer output lacks provenance; not safe to reuse")
+    # Old launcher wrote provenance inside the subject before calling -i,
+    # which made FreeSurfer reject every initial import. Still read legacy
+    # records to allow safe and backwards-compatible recovery.
+    external = provenance_path(study)
+    legacy = folder / "pacni-input.json"
+    found_any = False
+    for record in (external, legacy):
+        if record.is_symlink():
+            raise PipelineError("Refusing to use symlinked provenance file")
+        if record.exists():
+            found_any = True
+            found = json.loads(record.read_text(encoding="utf-8"))
+            if any(found.get(k) != v for k, v in wanted.items()):
+                raise PipelineError(
+                    "MRI input or FreeSurfer version changed: use a fresh scan folder")
+    if folder.exists() and not found_any:
+        raise PipelineError(
+            "FreeSurfer subject exists without input provenance; "
+            "inspect before reusing or resetting it")
     return wanted
+
+
+def record_provenance(study, image, wanted):
+    """Persist provenance before processing, without creating subject dir."""
+    path = provenance_path(study)
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(wanted, study=study.name,
+                   source=image.relative_to(study).as_posix())
+    # Atomic replace prevents a partial JSON record after interruption.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def recover_launcher_stub(study):
+    """Clean ONLY the exact one-file stub created by the old broken launcher.
+
+    Do not delete any actual FreeSurfer output, including partial processing,
+    and never delete an entire uninspected subject directory.
+    """
+    folder = subject_dir(study)
+    if not folder.exists():
+        return
+    if folder.is_symlink() or not folder.is_dir():
+        raise PipelineError("Unexpected FreeSurfer subject path; refusing cleanup")
+    contents = list(folder.iterdir())
+    if len(contents) == 1 and contents[0].name == "pacni-input.json" \
+            and contents[0].is_file() and not contents[0].is_symlink():
+        # By this point provenance() has validated the legacy record and
+        # record_provenance() has copied it to a safe external location.
+        contents[0].unlink()
+        folder.rmdir()
+        print("Recovered the metadata-only stub from the prior launcher.")
+        return
+    if not contents:
+        # An empty directory has no reconstruction; FreeSurfer needs to own
+        # the directory creation during the initial -i import.
+        folder.rmdir()
+        print("Removed empty FreeSurfer subject directory before initial import.")
 
 
 def completed(study):
@@ -136,15 +197,24 @@ def reconstruct(study):
     if completed(study):
         print("FreeSurfer already completed; reusing verified output.")
         return
-    was_started = subject_dir(study).is_dir()
-    already_imported = (subject_dir(study) / "mri" / "orig" / "001.mgz").is_file()
+
+    # Crucial invariant from the official FreeSurfer recon-all documentation:
+    # -i must be provided only when the subject directory DOES NOT EXIST.
+    # During resume, the already-imported 001.mgz is reused without -i.
+    record_provenance(study, image, meta)
     SUBJECTS.mkdir(parents=True, exist_ok=True)
-    subject_dir(study).mkdir(exist_ok=True)
-    info = subject_dir(study) / "pacni-input.json"
-    if not info.exists():
-        info.write_text(json.dumps(dict(meta, study=study.name,
-                                       source=image.relative_to(study).as_posix()),
-                                   indent=2), encoding="utf-8")
+    recover_launcher_stub(study)
+    folder = subject_dir(study)
+    if folder.exists() and folder.is_symlink():
+        raise PipelineError("Refusing to use symlinked subject directory")
+    already_imported = (folder / "mri" / "orig" / "001.mgz").is_file()
+    if folder.exists() and not already_imported:
+        raise PipelineError(
+            "FreeSurfer subject directory exists but mri/orig/001.mgz is absent. "
+            "This is not a metadata-only stub; inspect the folder and "
+            "recon-all.log before deciding whether to reset it. "
+            "No files were deleted."
+        )
     args = [
         "docker", "run", "--rm",
         "--mount", "type=bind,source=" + str(study.resolve()) + ",target=/input,readonly",
@@ -154,14 +224,12 @@ def reconstruct(study):
         "-e", "SUBJECTS_DIR=/subjects", "-e", "FS_LICENSE=/opt/pacni-license.txt",
         FS_IMAGE, "recon-all", "-sd", "/subjects", "-s", subject_id(study)
     ]
-    if not was_started or not already_imported:
-        # Import can be missing if a prior run failed before its first MRI step.
+    if not already_imported:
         args.extend(["-i", "/input/" + image.relative_to(study).as_posix()])
     args.extend(["-all", "-parallel", "-openmp", str(min(os.cpu_count() or 2, 8))])
     sh(args)
     if not completed(study):
         raise PipelineError("FreeSurfer did not create recon-all.done; inspect recon-all.log")
-
 
 def inspect(study):
     folder = subject_dir(study)
@@ -261,7 +329,9 @@ def compare_study_metadata():
     # scanner metadata are unavailable.
     recon_versions = {}
     for study in studies():
-        source = subject_dir(study) / "pacni-input.json"
+        source = provenance_path(study)
+        if not source.is_file():
+            source = subject_dir(study) / "pacni-input.json"
         if source.is_file():
             value = json.loads(source.read_text(encoding="utf-8")).get("fs_image")
             if value:
