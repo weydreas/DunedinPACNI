@@ -9,7 +9,32 @@ if (Get-Command py -ErrorAction SilentlyContinue) { $Python = 'py'; $Prefix = @(
 elseif (Get-Command python -ErrorAction SilentlyContinue) { $Python = 'python' }
 if (-not $Python) { Write-Host 'ERROR: Python 3 is required.' -ForegroundColor Red; exit 1 }
 
+$FreeSurferLicense = Join-Path $Root 'config\license.txt'
+$LicenseWizard = Join-Path $Root 'scripts\license_setup.py'
+
+function Invoke-LicenseSetup {
+    if (-not (Test-Path -LiteralPath $LicenseWizard)) {
+        Write-Host 'ERROR: scripts\license_setup.py is missing; run git pull.' -ForegroundColor Red
+        return $false
+    }
+    $params = @($Prefix) + @($LicenseWizard, 'setup')
+    & $Python @params
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'FreeSurfer license setup not completed.' -ForegroundColor Yellow
+        return $false
+    }
+    return $true
+}
+
 function Invoke-Pipeline([string]$Action, [string]$Study) {
+    if ($Action -in @('preflight', 'recon', 'all') -and -not (Test-Path -LiteralPath $FreeSurferLicense)) {
+        Write-Host 'FreeSurfer license is not installed; starting one-time setup.' -ForegroundColor Yellow
+        $licenseReady = Invoke-LicenseSetup
+        if (-not $licenseReady) {
+            Read-Host 'Press Enter to continue' | Out-Null
+            return
+        }
+    }
     $argsToPass = @($Prefix) + @($Backend, $Action, $Study)
     & $Python @argsToPass
     if ($LASTEXITCODE -ne 0) {
@@ -47,6 +72,7 @@ while ($true) {
         Write-Host '6. Full pipeline (DICOM import if needed -> recon -> QC -> PACNI)'
         Write-Host '7. Show study statuses'
         Write-Host '8. Compare acquisition metadata across years'
+        Write-Host '9. Set up/check FreeSurfer license (one time)'
         Write-Host '0. Back'
         $action = Read-Host 'Choose action'
         if ($action -eq '0') { break }
@@ -59,6 +85,7 @@ while ($true) {
             '6' { Invoke-Pipeline 'all' $Study }
             '7' { Invoke-Pipeline 'list' $Study }
             '8' { Invoke-Pipeline 'compare' $Study }
+            "9" { $ok = Invoke-LicenseSetup; Read-Host 'Press Enter to continue' | Out-Null }
         }
     }
 }
