@@ -286,7 +286,7 @@ def compare_study_metadata():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["list", "preflight", "recon", "qc", "score", "all", "compare"])
+    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare"])
     parser.add_argument("study", nargs="?")
     args = parser.parse_args()
     if args.command == "compare":
@@ -306,6 +306,10 @@ def main():
     if args.study is None:
         parser.error("A study name is required")
     study = get_study(args.study)
+    if args.command == "convert":
+        subprocess.run([sys.executable, str(ROOT / "scripts" / "dicom_import.py"),
+                        study.name], check=True)
+        return
     if args.command == "preflight":
         print("T1:", select_input(study))
         check_license()
@@ -318,6 +322,14 @@ def main():
     elif args.command == "score":
         score(study)
     elif args.command == "all":
+        try:
+            select_input(study)
+        except PipelineError:
+            # A normal DICOM export has nested numbered sequence directories.
+            # The operator must choose and explicitly confirm a 3D T1 series.
+            subprocess.run([sys.executable,
+                            str(ROOT / "scripts" / "dicom_import.py"),
+                            study.name], check=True)
         reconstruct(study)
         score(study)
 
