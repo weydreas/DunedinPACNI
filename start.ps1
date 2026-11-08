@@ -23,7 +23,7 @@ while ($true) {
     Clear-Host
     Write-Host 'DunedinPACNI - Local MRI Processing' -ForegroundColor Cyan
     Write-Host "Project: $Root"
-    Write-Host 'Add each study under MRI\<scan-name>\T1.nii.gz'
+    Write-Host 'Place original DICOM folders (SE000000 etc.) under MRI\<study>\ or add T1.nii.gz'
     Write-Host ''
     $Studies = @(Get-ChildItem -LiteralPath $Mri -Directory | Sort-Object Name)
     if ($Studies.Count -eq 0) { Write-Host 'No MRI studies found.' -ForegroundColor Yellow }
@@ -39,24 +39,26 @@ while ($true) {
     while ($true) {
         Clear-Host
         Write-Host "Selected MRI: $Study" -ForegroundColor Cyan
-        Write-Host '1. Preflight (input, Docker, license)'
-        Write-Host '2. Stage 1: FreeSurfer recon-all'
-        Write-Host '3. Stage 2: Automatic structural QC'
-        Write-Host '4. Stage 3: DunedinPACNI score'
-        Write-Host '5. Full pipeline (1 -> 2 -> 3)'
-        Write-Host '6. Show study statuses'
-        Write-Host '7. Compare acquisition metadata across years'
+        Write-Host '1. Stage 0: Convert nested DICOM series to 3D T1 NIfTI'
+        Write-Host '2. Preflight (T1, Docker, FreeSurfer license)'
+        Write-Host '3. Stage 1: FreeSurfer recon-all'
+        Write-Host '4. Stage 2: Automatic structural QC'
+        Write-Host '5. Stage 3: DunedinPACNI score'
+        Write-Host '6. Full pipeline (DICOM import if needed -> recon -> QC -> PACNI)'
+        Write-Host '7. Show study statuses'
+        Write-Host '8. Compare acquisition metadata across years'
         Write-Host '0. Back'
         $action = Read-Host 'Choose action'
         if ($action -eq '0') { break }
         switch ($action) {
-            '1' { Invoke-Pipeline 'preflight' $Study }
-            '2' { Invoke-Pipeline 'recon' $Study }
-            '3' { Invoke-Pipeline 'qc' $Study }
-            '4' { Invoke-Pipeline 'score' $Study }
-            '5' { Invoke-Pipeline 'all' $Study }
-            '6' { Invoke-Pipeline 'list' $Study }
-            '7' { Invoke-Pipeline 'compare' $Study }
+            '1' { Invoke-Pipeline 'convert' $Study }
+            '2' { Invoke-Pipeline 'preflight' $Study }
+            '3' { Invoke-Pipeline 'recon' $Study }
+            '4' { Invoke-Pipeline 'qc' $Study }
+            '5' { Invoke-Pipeline 'score' $Study }
+            '6' { Invoke-Pipeline 'all' $Study }
+            '7' { Invoke-Pipeline 'list' $Study }
+            '8' { Invoke-Pipeline 'compare' $Study }
         }
     }
 }
