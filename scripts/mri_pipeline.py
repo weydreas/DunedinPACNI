@@ -226,11 +226,70 @@ def score(study):
     print("PROVISIONAL: visual segmentation QC has not been performed.")
 
 
+def compare_study_metadata():
+    """Conservative cross-study consistency check; never claim validation
+    when scanner/protocol metadata are absent. Optional per-study scan.json
+    records declared acquisition metadata, not verified DICOM headers.
+    """
+    keys = ("scanner_model", "field_strength_t", "sequence", "voxel_size_mm")
+    known = {}
+    incomplete = []
+    for study in studies():
+        path = study / "scan.json"
+        if not path.is_file():
+            incomplete.append(study.name)
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or any(k not in data or data[k] in ("", None)
+                                              for k in keys):
+            incomplete.append(study.name)
+            continue
+        known[study.name] = {k: data[k] for k in keys}
+    differences = []
+    items = sorted(known.items())
+    if len(items) >= 2:
+        first_name, first_values = items[0]
+        for name, values in items[1:]:
+            for key in keys:
+                if values[key] != first_values[key]:
+                    differences.append({"first": first_name, "second": name,
+                                        "field": key, "first_value": first_values[key],
+                                        "second_value": values[key]})
+    # FreeSurfer image mismatch is also a comparability warning, even when
+    # scanner metadata are unavailable.
+    recon_versions = {}
+    for study in studies():
+        source = subject_dir(study) / "pacni-input.json"
+        if source.is_file():
+            value = json.loads(source.read_text(encoding="utf-8")).get("fs_image")
+            if value:
+                recon_versions[study.name] = value
+    if len(set(recon_versions.values())) > 1:
+        differences.append({"field": "freesurfer_image", "values": recon_versions})
+    status = ("review_required" if differences else
+              "metadata_consistent_not_validated" if
+              len(items) >= 2 and not incomplete else "insufficient_metadata")
+    result = {
+        "status": status, "studies": [p.name for p in studies()],
+        "declared_metadata": known, "missing_metadata": incomplete,
+        "freesurfer_images": recon_versions, "differences": differences,
+        "note": "This is a declared-metadata check, not a visual QC or scanner harmonization."
+    }
+    RESULTS.mkdir(parents=True, exist_ok=True)
+    (RESULTS / "comparability.json").write_text(
+        json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["list", "preflight", "recon", "qc", "score", "all"])
+    parser.add_argument("command", choices=["list", "preflight", "recon", "qc", "score", "all", "compare"])
     parser.add_argument("study", nargs="?")
     args = parser.parse_args()
+    if args.command == "compare":
+        compare_study_metadata()
+        return
     if args.command == "list":
         if not studies():
             print("Place scans under MRI/<study>/T1.nii.gz")
