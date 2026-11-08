@@ -1,0 +1,10 @@
+.git
+.github
+MRI
+work
+results
+config
+tests
+*.md
+start.cmd
+start.ps1
