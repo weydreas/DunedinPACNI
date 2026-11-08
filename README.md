@@ -197,6 +197,7 @@ The PowerShell menu has numbered actions:
    then FreeSurfer, structural QC and DunedinPACNI.
 7. List all detected studies and their processing statuses.
 8. Compare acquisition metadata across scans (where provided).
+9. Set up or check a personal FreeSurfer license (one-time).
 
 The first run downloads the pinned freesurfer/freesurfer:7.4.1 Docker image and
 builds a local R 4.3.2 image using the code in this fork. The original model
@@ -306,3 +307,49 @@ For an existing checkout of the PR branch, update the menu and importer with:
     git pull
 
 Then run .\start.cmd again.
+
+## FreeSurfer license — one-time Windows wizard
+
+FreeSurfer requires a **free personal license** issued after the user accepts
+the terms on its official registration page:
+https://surfer.nmr.mgh.harvard.edu/registration.html
+There is no automatic license generator or registration bypass. The emailed
+license text/file is reused for subsequent MRI scans.
+
+From start.cmd, choose an MRI and select **menu action 9**. When action 2
+(preflight), action 3 (recon-all) or action 6 (full pipeline) is used without
+an installed license, the same wizard starts automatically.
+
+The wizard:
+
+1. Checks config/license.txt; an existing plausible license is left unchanged.
+2. Searches Downloads, Desktop and common home paths for license*.txt and an
+   existing FS_LICENSE environment path. It displays only file paths, not
+   the contents, and offers numbered import choices.
+3. Can open the official registration page in the default browser. Fill out
+   the official form and download the emailed license file, or copy the
+   license-only lines from the message.
+4. Installs a selected file or pasted lines in config/license.txt once.
+   The file contents are never sent over the network by the program.
+5. Only checks structural plausibility (text, first line email, multi-line),
+   not actual validity with FreeSurfer. FreeSurfer itself validates the key
+   when it is used in a Docker container.
+
+If you already have a license.txt, simply choose action 9 and import it.
+The wizard supports [P] for a full local file path or [E] to paste the
+license-only text received by email. Never paste a whole email thread.
+The registration step must be completed by the user; the wizard cannot
+agree to the license terms on the user's behalf.
+
+The license and any temporary installation files remain under the
+Git-ignored config/ directory. The Docker build context also excludes
+config/. The license is mounted read-only for recon-all and **is not
+baked into the Docker image**.
+
+Advanced commands (optional):
+
+    py -3 scripts/license_setup.py setup
+    py -3 scripts/license_setup.py status
+
+If you plan to use FreeSurfer in a commercial Biodata product or on clients'
+data, independently review the applicable FreeSurfer license terms first.
