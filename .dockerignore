@@ -8,3 +8,6 @@ tests
 *.md
 start.cmd
 start.ps1
+
+# Never send local converter binaries to the R image build context.
+tools
