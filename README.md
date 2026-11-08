@@ -115,7 +115,7 @@ Where `outdir` is the path to the directory where you want to save DunedinPACNI 
 ### What if I am missing gray-white signal intensity ratio measures?
 DunedinPACNI is valid with or without gray-white signal intensity ratio measures. You can choose which version you want to use based on your data availability and preferences.
 
-To estimate DunedinPACNI without gray-white signal intensity ratio, simly set the `gwr_missing` option to `TRUE` for both `LoadFreeSurferStats` and/or `ExportDuinedinPACNI`. For example, if you are reading FreeSurfer data from the full `recon-all` output, run:
+To estimate DunedinPACNI without gray-white signal intensity ratio, simly set the `missing_gwr` option to `TRUE` for both `LoadFreeSurferStats` and/or `ExportDuinedinPACNI`. For example, if you are reading FreeSurfer data from the full `recon-all` output, run:
 ```
 LoadFreeSurferStats(fsdir = '<YOUR FREESURFER SUBJECTS DIRECTORY>', 
                     sublist = '<YOUR WORKING DIRECTORY>/sublist.csv',
@@ -130,7 +130,7 @@ ExportDunedinPACNI(data = df,
 ```
 
 ### What if I am missing estimates for some ROIs?
-You may have missing data from certain ROIs because of low data quality or lack of availabiliy. If so, we allow users to impute the average score from the Dunedin Study MRI dataset. Each missing ROI will slightly reduce the accuracy of resulting DunedinPACNI scores. Because the same value is being imputed for all subjects, imputed ROIs should have a uniform effect on DunedinPACNI scores in your sample, to avoid affecting within-group comparisons. If you are missing >20% of the ROIs included in the DunedinPACNI algorithm, we think that is too much missingness to estimate DunedinPACNI and `ExportDunedinPACNI` will throw an error.
+You may have missing data from certain ROIs because of low data quality or lack of availabiliy. If so, we allow users to impute the average score from the Dunedin Study MRI dataset. Each missing ROI will slightly reduce the accuracy of resulting DunedinPACNI scores. Because the same value is being imputed for all subjects, imputed ROIs should have a uniform effect on DunedinPACNI scores in your sample, to avoid affecting within-group comparisons. If you are missing 20% or more of the ROIs included in the DunedinPACNI algorithm, we think that is too much missingness to estimate DunedinPACNI and `ExportDunedinPACNI` will throw an error.
 
 If you have a lot of missingness, we would encourage you to consider [more sophisticated approaches to imputation](https://link.springer.com/article/10.1007/s12021-019-09426-x). Ultimately, however, how you handle missing data is up to your preferences, the specifics of your data, and your research question.
 
@@ -158,3 +158,62 @@ Current package version 0.0.0.1
 This package was built using R version 4.3.2 and uses tools from the R package `progress` (version 1.2.3).
 
 This package was built by Ethan Whitman (ethan.whitman@duke.edu).
+# Windows local MRI processing (Biodata launcher)
+
+The pipeline below processes MRI **locally**. Patient images, reconstructed brain data,
+FreeSurfer license, and DunedinPACNI results are ignored by Git.
+
+## One-time setup
+
+1. Clone this fork on Windows 11, with Python 3 and Docker Desktop in Linux/WSL2 mode.
+2. Request a FreeSurfer license from https://surfer.nmr.mgh.harvard.edu/registration.html
+   and save it in config/license.txt. Never commit this file.
+3. Create a separate directory for each MRI study:
+
+    MRI/2024-08-02/T1.nii.gz
+    MRI/2026-06-01/T1.nii.gz
+
+Each study can instead contain a single other NIfTI/MGZ image, or a dedicated
+MRI/2024-08-02/T1/ directory of DICOM images from **one 3D T1 series**.
+If a scan folder contains multiple NIfTI volumes, use the exact filename
+T1.nii.gz (T1.nii or T1.mgz also work) to select the correct volume.
+DICOM folders must never mix distinct SeriesInstanceUIDs; this launcher
+does not automatically check DICOM series metadata.
+
+## Interactive launcher
+
+Double-click start.cmd (or run it from PowerShell). Select an MRI study.
+The PowerShell menu has numbered actions:
+
+1. Preflight: Docker, license and selected 3D T1.
+2. FreeSurfer reconstruction (resume supported if input has not changed).
+3. Structural quality gate: completion and region statistics.
+4. DunedinPACNI calculation through a local R container.
+5. Full pipeline in sequence: FreeSurfer, structural QC, DunedinPACNI.
+6. List all detected studies and their processing statuses.
+
+The first run downloads the pinned freesurfer/freesurfer:7.4.1 Docker image and
+builds a local R 4.3.2 image using the code in this fork. The original model
+was developed using FreeSurfer 6.0. To compare MRI dates, the images must be
+processed with **the same version** and a comparable preprocessing protocol.
+Change the FreeSurfer image only intentionally via the PACNI_FS_IMAGE environment
+variable. The software refuses to reuse existing reconstruction outputs when
+the input or selected FreeSurfer image differs from its provenance.
+
+Outputs appear in results/<subject-id>/pacni.csv, qc.json and run.json.
+When gray/white ratio output is unavailable, the official no-GWR coefficients
+are used rather than wholesale GWR imputation.
+
+**Limitations:** The automated QC gate verifies only structural output files;
+it does not review brain boundaries, surfaces or segmentation visually.
+Every score is marked **provisional** until visual FreeSurfer QC by a qualified
+reviewer. Cross-scanner differences and processing/version effects can mimic
+longitudinal changes; the score is a research phenotype, not a diagnosis.
+
+For CLI automation, run:
+
+    py -3 scripts/mri_pipeline.py list
+    py -3 scripts/mri_pipeline.py all 2024-08-02
+    py -3 scripts/mri_pipeline.py qc 2024-08-02
+
+Tests without MRI or Docker: python -m unittest discover -s tests -v
