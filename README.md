@@ -191,6 +191,7 @@ The PowerShell menu has numbered actions:
 4. DunedinPACNI calculation through a local R container.
 5. Full pipeline in sequence: FreeSurfer, structural QC, DunedinPACNI.
 6. List all detected studies and their processing statuses.
+7. Compare acquisition metadata across scans (where provided).
 
 The first run downloads the pinned freesurfer/freesurfer:7.4.1 Docker image and
 builds a local R 4.3.2 image using the code in this fork. The original model
@@ -217,3 +218,18 @@ For CLI automation, run:
     py -3 scripts/mri_pipeline.py qc 2024-08-02
 
 Tests without MRI or Docker: python -m unittest discover -s tests -v
+
+## Optional cross-year comparability metadata
+
+To compare MRI studies, place scan.json beside T1.nii.gz in each study
+folder. Its fields are scanner_model (string), field_strength_t (number),
+sequence (string) and voxel_size_mm (three-number array). Example:
+
+    {"scanner_model":"GE Signa Architect","field_strength_t":3,
+     "sequence":"3D MPRAGE","voxel_size_mm":[1,1,1]}
+
+Choose menu action 7. The results/comparability.json file reports differences
+as review_required, consistent declared metadata as metadata_consistent_not_validated,
+or insufficient_metadata if source metadata are absent. It also compares
+recorded FreeSurfer image tags across processed scans. Declared consistency
+is not proof of matching image quality or biological comparability.
