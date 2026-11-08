@@ -1,0 +1,7 @@
+# Patient data, reconstructed brain images, computed results and local license.
+/MRI/
+/work/
+/results/
+/config/license.txt
+__pycache__/
+*.py[cod]
