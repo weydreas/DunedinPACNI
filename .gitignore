@@ -5,3 +5,6 @@
 /config/license.txt
 __pycache__/
 *.py[cod]
+
+# Local converter executable downloaded by the user.
+/tools/
