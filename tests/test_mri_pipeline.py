@@ -93,6 +93,24 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(report["visual_qc"], "not_performed")
         self.assertFalse(report["gwr_available"])
 
+    def test_cross_year_comparability_is_explicitly_uncertain(self):
+        one = self.make_study("2024")
+        two = self.make_study("2026")
+        result = pipeline.compare_study_metadata()
+        self.assertEqual(result["status"], "insufficient_metadata")
+        self.assertEqual(set(result["missing_metadata"]), {"2024", "2026"})
+        metadata = {"scanner_model": "Scanner A", "field_strength_t": 3,
+                    "sequence": "3D MPRAGE", "voxel_size_mm": [1, 1, 1]}
+        for study in (one, two):
+            (study / "scan.json").write_text(json.dumps(metadata))
+        result = pipeline.compare_study_metadata()
+        self.assertEqual(result["status"], "metadata_consistent_not_validated")
+        metadata["field_strength_t"] = 1.5
+        (two / "scan.json").write_text(json.dumps(metadata))
+        result = pipeline.compare_study_metadata()
+        self.assertEqual(result["status"], "review_required")
+        self.assertTrue(result["differences"])
+
     def test_qc_blocks_incomplete_stats(self):
         study = self.make_study()
         with self.assertRaises(pipeline.PipelineError):
