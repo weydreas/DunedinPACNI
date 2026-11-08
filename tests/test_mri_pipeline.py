@@ -93,6 +93,24 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(report["visual_qc"], "not_performed")
         self.assertFalse(report["gwr_available"])
 
+    def test_restart_reimports_t1_after_early_failure(self):
+        study = self.make_study()
+        image = study / "T1.nii.gz"
+        image.write_bytes(b"synthetic")
+        subject = pipeline.subject_dir(study)
+        subject.mkdir(parents=True)
+        (subject / "pacni-input.json").write_text(json.dumps({
+            "signature": pipeline.signature(study, image),
+            "fs_image": pipeline.FS_IMAGE
+        }))
+        with mock.patch.object(pipeline, "check_license"), \
+             mock.patch.object(pipeline, "check_docker"), \
+             mock.patch.object(pipeline, "sh") as sh:
+            with self.assertRaises(pipeline.PipelineError):
+                pipeline.reconstruct(study)
+        argv = sh.call_args.args[0]
+        self.assertIn("-i", argv)
+
     def test_cross_year_comparability_is_explicitly_uncertain(self):
         one = self.make_study("2024")
         two = self.make_study("2026")
