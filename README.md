@@ -185,13 +185,18 @@ does not automatically check DICOM series metadata.
 Double-click start.cmd (or run it from PowerShell). Select an MRI study.
 The PowerShell menu has numbered actions:
 
-1. Preflight: Docker, license and selected 3D T1.
-2. FreeSurfer reconstruction (resume supported if input has not changed).
-3. Structural quality gate: completion and region statistics.
-4. DunedinPACNI calculation through a local R container.
-5. Full pipeline in sequence: FreeSurfer, structural QC, DunedinPACNI.
-6. List all detected studies and their processing statuses.
-7. Compare acquisition metadata across scans (where provided).
+1. **DICOM import:** recursively find the series in MRI/<study>/SE000000,
+   SE000002 and any other nested folders, convert each with dcm2niix,
+   show sequence names/resolution and ask you to pick and confirm a plausible
+   anatomical 3D T1 series. It does not manufacture T1 from FLAIR or T2.
+2. Preflight: Docker, license and selected 3D T1.
+3. FreeSurfer reconstruction (resume supported if input has not changed).
+4. Structural quality gate: completion and region statistics.
+5. DunedinPACNI calculation through a local R container.
+6. Full pipeline: automatically request DICOM import when T1 is missing,
+   then FreeSurfer, structural QC and DunedinPACNI.
+7. List all detected studies and their processing statuses.
+8. Compare acquisition metadata across scans (where provided).
 
 The first run downloads the pinned freesurfer/freesurfer:7.4.1 Docker image and
 builds a local R 4.3.2 image using the code in this fork. The original model
@@ -228,8 +233,76 @@ sequence (string) and voxel_size_mm (three-number array). Example:
     {"scanner_model":"GE Signa Architect","field_strength_t":3,
      "sequence":"3D MPRAGE","voxel_size_mm":[1,1,1]}
 
-Choose menu action 7. The results/comparability.json file reports differences
+Choose menu action 8. The results/comparability.json file reports differences
 as review_required, consistent declared metadata as metadata_consistent_not_validated,
 or insufficient_metadata if source metadata are absent. It also compares
 recorded FreeSurfer image tags across processed scans. Declared consistency
 is not proof of matching image quality or biological comparability.
+
+
+## Installing the DICOM converter on Windows
+
+The importer requires the open-source program dcm2niix. No Python imaging
+packages, R, or FreeSurfer are needed for the **import step itself**.
+
+In PowerShell, open this repository directory and run:
+
+    New-Item -ItemType Directory -Force .\tools | Out-Null
+    Invoke-WebRequest 'https://github.com/rordenlab/dcm2niix/releases/latest/download/dcm2niix_win.zip' -OutFile "$env:TEMP\dcm2niix_win.zip"
+    Expand-Archive "$env:TEMP\dcm2niix_win.zip" -DestinationPath .\tools -Force
+    Get-ChildItem .\tools -Recurse -Filter dcm2niix.exe
+
+If the final command finds dcm2niix.exe, the menu will locate it automatically.
+Alternatively, put dcm2niix on PATH or set PACNI_DCM2NIIX to the executable
+path. The converter's Windows binaries are released at
+https://github.com/rordenlab/dcm2niix/releases .
+
+**Important:** dcm2niix performs DICOM to NIfTI format conversion. A DICOM
+dataset containing only T2, FLAIR or other contrast modalities cannot be
+converted into the actual T1-weighted acquisition expected by PACNI.
+
+## Importing nested DICOM directories
+
+Original data may be structured like this:
+
+    MRI/
+      2015.07 MRI Brain/
+        SE000000/
+          IM0001.dcm
+        SE000002/
+          IM0001.dcm
+        SE000013/
+          IM0001.dcm
+
+Run start.cmd, choose the study and press **1** to convert. The importer
+calls dcm2niix with -d 9 to search nested directories, -b y to preserve
+BIDS sidecar metadata and -ba y to anonymize JSON sidecars. All converted
+series are retained in work/imports/<study-id>/converted, together with a
+series-manifest.json identifying likely T1, excluded FLAIR/T2 and uncertain
+images. Series metadata and voxel sizes are inspected before any selection.
+Only T1-labeled, 3D, single-volume NIfTI-1 images with voxel dimensions no
+greater than 2 mm can be selected automatically. Those tests are a *screening
+rule*, not proof that an image meets all PACNI acquisition/QC requirements.
+
+You must choose the series number and type YES after reviewing that it is
+an anatomical T1 volume. Otherwise the importer does not create the input.
+The selected image is copied to MRI/<study>/T1.nii.gz, with T1.json,
+pacni-import.json and optional scan.json acquisition metadata alongside it.
+Original DICOMs are never moved or changed. If no plausible T1 is found,
+the program stops, keeps converted files for inspection, and does not
+invent a T1 volume. For uncertain series use 3D Slicer to inspect anatomy.
+
+To run just the conversion from PowerShell:
+
+    py -3 scripts/dicom_import.py "2015.07 MRI Brain"
+
+The converted T1 can then be processed using menu actions 2-6. The complete
+pipeline action 6 also invokes conversion when T1 is not yet available.
+Scan contents, conversion outputs and FreeSurfer licenses remain in Git-ignored
+local directories.
+
+For an existing checkout of the PR branch, update the menu and importer with:
+
+    git pull
+
+Then run .\start.cmd again.
