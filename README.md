@@ -354,3 +354,32 @@ Advanced commands (optional):
 
 If you plan to use FreeSurfer in a commercial Biodata product or on clients'
 data, independently review the applicable FreeSurfer license terms first.
+
+
+## FreeSurfer first-run and interrupted processing safety
+
+The first FreeSurfer recon-all import must start with a **nonexistent** subject
+directory (using -i). FreeSurfer creates and owns this directory. The launcher
+stores its input signature and selected FreeSurfer container version separately
+under ignored work/provenance/<subject-id>.json instead of pre-creating a subject
+directory. If recon-all has already imported mri/orig/001.mgz, its next invocation
+continues with -all **without** -i.
+
+**Recovery for the bug in the original Windows launcher:** the older version
+created a subject directory containing only pacni-input.json, then FreeSurfer
+rejected the new input. The new launcher checks that legacy provenance matches
+the selected T1 file and FreeSurfer image; it moves the record to the external
+provenance area, then removes **only** this one-file metadata stub. It does not
+delete real recon-all output. If other output files are present but the original
+001.mgz is missing, it stops for manual review rather than resetting anything.
+
+To update an existing local installation once a fix is available in your branch:
+
+    git pull
+
+Then select the same MRI and rerun action 3 (FreeSurfer recon-all).
+Never delete the whole work/freesurfer folder: it may contain other scans.
+The original MRI/ folder and config/license.txt are not altered by recovery.
+
+As before, completing the FreeSurfer run does not establish visual
+segmentation QC or DunedinPACNI validity. Those need the later checks.
