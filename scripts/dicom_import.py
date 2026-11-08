@@ -74,8 +74,7 @@ def source_files(study):
                          if not (Path(folder) / name).is_symlink()]
         for name in files:
             p = Path(folder) / name
-            if p.is_symlink() or p.suffix.lower() in
-                (".nii", ".gz", ".mgz", ".json", ".txt", ".csv"):
+            if p.is_symlink() or p.suffix.lower() in (".nii", ".gz", ".mgz", ".json", ".txt", ".csv"):
                 continue
             if p.name.upper() == "DICOMDIR":
                 continue
