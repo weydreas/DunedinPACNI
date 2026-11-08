@@ -65,7 +65,7 @@ class DicomImportTests(unittest.TestCase):
         }), encoding="utf-8")
 
     def test_recursive_series_discovery(self):
-        names = [str(p.relative_to(self.study)) for p in imp.source_files(self.study)]
+        names = [p.relative_to(self.study).as_posix() for p in imp.source_files(self.study)]
         self.assertEqual(names, ["SE000013/IM0001.dcm"])
 
     def test_filter_does_not_allow_flair(self):
