@@ -180,6 +180,9 @@ def provenance(study, image, variant="original"):
         if record.exists():
             found_any = True
             found = json.loads(record.read_text(encoding="utf-8"))
+            if "variant" not in found and variant == "original":
+                # Old provenance records predate source variants.
+                found["variant"] = "original"
             if any(found.get(k) != v for k, v in wanted.items()):
                 raise PipelineError(
                     "MRI input or FreeSurfer version changed: use a fresh scan folder")
@@ -196,8 +199,9 @@ def record_provenance(study, image, wanted, variant="original"):
     if path.exists():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = dict(wanted, study=study.name,
-                   source=image.relative_to(ROOT).as_posix())
+    relative = (image.relative_to(study) if variant == "original"
+                else image.relative_to(ROOT))
+    payload = dict(wanted, study=study.name, source=relative.as_posix())
     # Atomic replace prevents a partial JSON record after interruption.
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -318,24 +322,27 @@ def quality_gate(study, variant="original"):
     return report
 
 
-def build_study_report(study):
+def build_study_report(study, variant="original"):
     """Build an evidence-based research summary without starting Docker or altering MRI."""
-    out = RESULTS / subject_id(study)
-    folder = subject_dir(study)
+    out = RESULTS / subject_id(study, variant)
+    folder = subject_dir(study, variant)
     lines = [
         "DunedinPACNI — отчет по исследованию",
         "Исследование: " + study.name,
-        "ID реконструкции: " + subject_id(study),
+        "ID реконструкции: " + subject_id(study, variant),
+        "Тип входа: " + ("СИНТЕТИЧЕСКИЙ SynthSR (НЕ оригинальная МРТ)"
+                          if variant == "synthsr" else "оригинальная анатомическая МРТ"),
         "",
     ]
 
     image = None
     provenance_ok = False
     try:
-        image = select_input(study)
-        lines.append("T1: " + str(image.relative_to(study)))
+        image = active_input(study, variant)
+        display = image.relative_to(study) if variant == "original" else image.relative_to(ROOT)
+        lines.append("T1: " + str(display))
         try:
-            provenance(study, image)
+            provenance(study, image, variant)
             provenance_ok = True
         except (PipelineError, OSError, ValueError) as error:
             lines.append("Целостность входных данных: НЕ ПОДТВЕРЖДЕНА (" +
@@ -343,7 +350,7 @@ def build_study_report(study):
     except (PipelineError, OSError) as error:
         lines.append("T1: не найден или не выбран (" + str(error) + ")")
 
-    finished = completed(study)
+    finished = completed(study, variant)
     if finished:
         lines.append("FreeSurfer recon-all: завершен (recon-all.done)")
     elif folder.is_dir():
@@ -352,7 +359,7 @@ def build_study_report(study):
         lines.append("FreeSurfer recon-all: не запускался / нет результатов")
     structurally_valid = False
     try:
-        evidence = inspect(study)
+        evidence = inspect(study, variant)
         structurally_valid = evidence["structural_qc"] == "pass"
     except (OSError, ValueError) as error:
         lines.append("Автоматический структурный QC: ошибка чтения (" + str(error) + ")")
@@ -399,6 +406,8 @@ def build_study_report(study):
                 raise ValueError("run.json does not match the selected study")
             if run.get("result") != "pacni.csv":
                 raise ValueError("run.json does not reference pacni.csv")
+            if run.get("source_variant", "original") != variant:
+                raise ValueError("Run input variant mismatch")
             if run.get("freesurfer_image") != FS_IMAGE:
                 raise ValueError("FreeSurfer version differs from current configuration")
             with result_path.open("r", encoding="utf-8-sig", newline="") as stream:
@@ -406,7 +415,7 @@ def build_study_report(study):
                 if not reader.fieldnames or not {"ID", "pacni"}.issubset(reader.fieldnames):
                     raise ValueError("CSV must include ID and pacni columns")
                 records = list(reader)
-            if len(records) != 1 or records[0]["ID"] != subject_id(study):
+            if len(records) != 1 or records[0]["ID"] != subject_id(study, variant):
                 raise ValueError("CSV participant ID or row count mismatch")
             value = float(records[0]["pacni"])
             if not math.isfinite(value):
@@ -430,6 +439,17 @@ def build_study_report(study):
                          str(error))
             lines.append("Результат нельзя интерпретировать; проверь пункт 5 и файлы расчета.")
 
+    if variant == "synthsr":
+        lines.extend([
+            "",
+            "ВНИМАНИЕ: СИНТЕТИЧЕСКИЙ РЕЗУЛЬТАТ",
+            "SynthSR предсказывает промежуточную анатомию по обученной модели.",
+            "Синтетические срезы не являются измерением и не годятся для "
+            "радиологического заключения или исключения патологий.",
+            "SynthSR может замещать патологические изменения нормальной тканью.",
+            "Синтетический сигнал GWR исключен из модели PACNI.",
+            "Результат не сопоставим напрямую с PACNI по оригинальной 3D T1.",
+        ])
     lines.extend([
         "",
         "ОГРАНИЧЕНИЯ",
@@ -445,10 +465,10 @@ def build_study_report(study):
     return "\n".join(lines) + "\n"
 
 
-def report_study(study):
+def report_study(study, variant="original"):
     """Show the complete local report and keep a UTF-8 copy for later inspection."""
-    summary = build_study_report(study)
-    output = RESULTS / subject_id(study) / "report.txt"
+    summary = build_study_report(study, variant)
+    output = RESULTS / subject_id(study, variant) / "report.txt"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(summary, encoding="utf-8")
     print(summary)
@@ -549,7 +569,7 @@ def compare_study_metadata():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare", "report"])
+    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare", "report", "upscale", "all-synthsr", "report-synthsr"])
     parser.add_argument("study", nargs="?")
     args = parser.parse_args()
     if args.command == "compare":
@@ -557,18 +577,32 @@ def main():
         return
     if args.command == "list":
         if not studies():
-            print("Place scans under MRI/<study>/T1.nii.gz")
+            print("Place scans under MRI/<study>/")
         for study in studies():
+            mark = " [✓ UPSCALED via SynthSR]" if synth_index(study) else ""
             try:
                 image = select_input(study)
-                print(study.name, "->", image.relative_to(study),
-                      "[complete]" if completed(study) else "[not processed]")
+                status = "[complete]" if completed(study) else "[not processed]"
+                print(study.name, "->", image.relative_to(study), status + mark)
             except PipelineError as error:
-                print(study.name, "[input needed]", error)
+                print(study.name, "[native T1 not available]", error, mark)
         return
     if args.study is None:
         parser.error("A study name is required")
     study = get_study(args.study)
+    if args.command == "upscale":
+        try:
+            upscaler().upscale(study)
+        except Exception as error:
+            raise PipelineError(str(error)) from error
+        return
+    if args.command == "all-synthsr":
+        reconstruct(study, "synthsr")
+        score(study, "synthsr")
+        return
+    if args.command == "report-synthsr":
+        report_study(study, "synthsr")
+        return
     if args.command == "convert":
         subprocess.run([sys.executable, str(ROOT / "scripts" / "dicom_import.py"),
                         study.name], check=True)
