@@ -77,7 +77,16 @@ function Invoke-PatientAction([string]$Action, [string]$First, [string]$Second) 
 function Show-StudyMenu([object]$SelectedScan) {
     $oldMriRoot = $env:PACNI_MRI_ROOT
     $oldPatientId = $env:PACNI_PATIENT_ID
+    $oldVisible = $env:PACNI_VISIBLE_STUDIES
     try {
+        $allPatientScans = @(Get-PatientScans ([string]$SelectedScan.patient_id))
+        $visibleNames = @()
+        foreach ($scan in $allPatientScans) {
+            if ([string]$scan.root -eq [string]$SelectedScan.root) {
+                $visibleNames += [string]$scan.name
+            }
+        }
+        $env:PACNI_VISIBLE_STUDIES = ConvertTo-Json -InputObject $visibleNames -Compress
         $env:PACNI_MRI_ROOT = [string]$SelectedScan.root
         if ($SelectedScan.storage_patient_id) {
             $env:PACNI_PATIENT_ID = [string]$SelectedScan.storage_patient_id
@@ -128,6 +137,8 @@ function Show-StudyMenu([object]$SelectedScan) {
         else { $env:PACNI_MRI_ROOT = $oldMriRoot }
         if ($null -eq $oldPatientId) { Remove-Item Env:PACNI_PATIENT_ID -ErrorAction SilentlyContinue }
         else { $env:PACNI_PATIENT_ID = $oldPatientId }
+        if ($null -eq $oldVisible) { Remove-Item Env:PACNI_VISIBLE_STUDIES -ErrorAction SilentlyContinue }
+        else { $env:PACNI_VISIBLE_STUDIES = $oldVisible }
     }
 }
 
