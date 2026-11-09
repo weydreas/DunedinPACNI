@@ -227,14 +227,31 @@ while ($true) {
         continue
     }
     if ($pick -eq 'A' -and $state.unassigned_legacy_studies.Count -gt 0) {
+        $unassigned = @($state.unassigned_legacy_studies)
+        Write-Host 'Unassigned original MRI folders:'
+        for ($j=0; $j -lt $unassigned.Count; $j++) {
+            Write-Host ("{0}. {1}" -f ($j+1), $unassigned[$j])
+        }
+        Write-Host '0. All unassigned folders (only if you verified they belong to ONE person)'
+        $folderChoice = Read-Host 'Select MRI number to assign (Enter cancels)'
+        if (-not $folderChoice) { continue }
+        $folderNumber = -1
+        if (-not [int]::TryParse($folderChoice, [ref]$folderNumber) -or
+            $folderNumber -lt 0 -or $folderNumber -gt $unassigned.Count) { continue }
         for ($i=0; $i -lt $persons.Count; $i++) {
             Write-Host ("{0}. {1}" -f ($i+1), $persons[$i].label)
         }
-        $choice = Read-Host 'Assign all existing legacy MRI folders to patient number'
+        if ($persons.Count -eq 0) {
+            Write-Host 'Create a patient first.' -ForegroundColor Yellow
+            Read-Host 'Press Enter' | Out-Null
+            continue
+        }
+        $choice = Read-Host 'Assign selected MRI to patient number'
         $index = 0
         if ([int]::TryParse($choice, [ref]$index) -and $index -ge 1 -and $index -le $persons.Count) {
-            if ((Read-Host 'Type ASSIGN to confirm attribution') -eq 'ASSIGN') {
-                Invoke-PatientAction 'attach-legacy' ([string]$persons[$index-1].id) ''
+            $studyName = if ($folderNumber -eq 0) { '' } else { [string]$unassigned[$folderNumber-1] }
+            if ((Read-Host 'Type ASSIGN to confirm correct patient') -eq 'ASSIGN') {
+                Invoke-PatientAction 'attach-legacy' ([string]$persons[$index-1].id) $studyName
             }
         }
         continue
