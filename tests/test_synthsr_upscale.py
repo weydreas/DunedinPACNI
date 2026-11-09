@@ -100,6 +100,7 @@ class SynthSRTests(unittest.TestCase):
         index = sr.read_index(self.study)
         self.assertIsNotNone(index)
         self.assertTrue(index["synthetic"])
+        self.assertEqual(index["model_sha256"], sr.SYNTHSR_MODEL_SHA256)
         self.assertTrue(index["output_path"].is_file())
         self.assertIn("--network", commands[-1])
         self.assertIn("none", commands[-1])
