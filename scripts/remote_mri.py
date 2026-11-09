@@ -26,11 +26,11 @@ from pathlib import Path
 import patient_registry as patients
 
 MAX_LISTED = 5000
-MAX_PREVIEW = 262144
+MAX_PREVIEW = 65536
 MAX_SERIES_BYTES = 4 * 1024**3
 MAX_SERIES_FILES = 2000
 MAX_SINGLE_FILE = 512 * 1024**2
-T1 = re.compile(r"(?i)(?:^|[^a-z])t1(?:$|[^a-z])|mprage|mp.rage|bravo|(?:f)?spgr|mdeft")
+T1 = re.compile(r"(?i)(?:^|[^a-z0-9])t1(?:w|wi|[-_ ]?weighted|[-_ ]?3d|[-_ ]?se)?(?:$|[^a-z0-9])|mprage|mp.rage|bravo|(?:f)?spgr|mdeft|tfl")
 EXCLUDE = re.compile(r"(?i)t2|flair|tof|angio|dwi|diffusion|adc|swi|scout|locali[sz]er|survey|3.pl|fieldmap")
 SAFE_SUFFIX = (".dcm", ".ima", "")
 ALLOWED_HOSTS = {
@@ -348,22 +348,41 @@ def parse_dicom(data):
 
 
 def discover_series(share, files, fetch=http_request):
-    by_parent = {}
-    for entry in files:
-        by_parent.setdefault(entry["parent"], []).append(entry)
-    options = []
-    for parent, members in sorted(by_parent.items()):
-        if len(members) < 12:
-            continue
+    """Group all remote DICOM by measured SeriesInstanceUID, not folder names.
+
+    One cloud folder may hold many sequences. Inspect only byte ranges, never
+    full content, so filtering selects exactly the required T1 series.
+    """
+    if len(files) > MAX_SERIES_FILES:
+        raise CloudError("Too many DICOM candidates for selective header scan")
+    by_uid = {}
+    unreadable = []
+    for file in files:
         try:
-            header = preview_dicom(share, members[0], fetch)
+            header = preview_dicom(share, file, fetch)
         except CloudError:
+            unreadable.append(file)
             continue
-        contrast = " ".join([header.get("description",""),header.get("protocol","")])
+        uid = header["series_uid"]
+        group = by_uid.setdefault(uid, {"files": [], "header": header,
+                                         "parents": set(), "patient_ids": set()})
+        group["files"].append(file)
+        group["parents"].add(file["parent"])
+        if header.get("patient_id"):
+            group["patient_ids"].add(header["patient_id"])
+    options = []
+    for uid, group in by_uid.items():
+        members = group["files"]
+        if len(members) < 12 or len(group["patient_ids"]) > 1:
+            continue
+        # If unknown headers exist in a candidate series folder, completeness
+        # cannot be established: refuse rather than silently skip missing slices.
+        if any(f["parent"] in group["parents"] for f in unreadable):
+            continue
+        header = group["header"]
+        contrast = " ".join([header.get("description", ""),header.get("protocol", "")])
         if header.get("modality") != "MR" or EXCLUDE.search(contrast) or not T1.search(contrast):
             continue
-        # DICOM headers can label 2D SE T1 correctly: it is not a native
-        # 3D T1 acceptable for DunedinPACNI, though SynthSR can try it.
         try:
             thick = float(header.get("slice_thickness_mm", "0"))
         except ValueError:
@@ -371,12 +390,12 @@ def discover_series(share, files, fetch=http_request):
         native = (header.get("acquisition_type", "").upper() == "3D"
                   and 0 < thick <= 1.5 and len(members) >= 64)
         grade = "NATIVE_3D_T1_CANDIDATE" if native else "SYNTHSR_ONLY_CANDIDATE"
-        options.append({"folder": parent, "count": len(members),
-                        "size": sum(x["size"] for x in members),
+        options.append({"folder": ", ".join(sorted(group["parents"])),
+                        "count": len(members), "size": sum(x["size"] for x in members),
                         "description": header.get("description") or header.get("protocol") or "T1",
-                        "grade": grade, "uid": header["series_uid"], "files": members})
-    return sorted(options, key=lambda x:(x["grade"] != "NATIVE_3D_T1_CANDIDATE",x["folder"]))
-
+                        "grade": grade, "uid": uid, "files": members})
+    return sorted(options, key=lambda x:(x["grade"] != "NATIVE_3D_T1_CANDIDATE",
+                                          x["folder"], x["uid"]))
 
 def validate_entire_series(share, selected, fetch=http_request):
     entries = selected["files"]
