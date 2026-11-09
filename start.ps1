@@ -51,9 +51,27 @@ while ($true) {
     Write-Host 'Place original DICOM folders (SE000000 etc.) under MRI\<study>\ or add T1.nii.gz'
     Write-Host ''
     $Studies = @(Get-ChildItem -LiteralPath $Mri -Directory | Sort-Object Name)
+    $UpscaledStates = @{}
+    try {
+        $statusArgs = @($Prefix) + @($Backend, 'upscale-status')
+        $jsonState = (& $Python @statusArgs) -join ''
+        if ($LASTEXITCODE -eq 0 -and $jsonState) {
+            $stateObj = $jsonState | ConvertFrom-Json
+            foreach ($entry in $stateObj.PSObject.Properties) {
+                $UpscaledStates[$entry.Name] = [bool]$entry.Value
+            }
+        }
+    } catch {
+        Write-Host 'Upscale status not available; study list remains unchanged.' -ForegroundColor Yellow
+    }
     if ($Studies.Count -eq 0) { Write-Host 'No MRI studies found.' -ForegroundColor Yellow }
     for ($i = 0; $i -lt $Studies.Count; $i++) {
-        Write-Host ("{0}. {1}" -f ($i + 1), $Studies[$i].Name)
+        $title = $Studies[$i].Name
+        $mark = ''
+        if ($UpscaledStates.ContainsKey($title) -and $UpscaledStates[$title]) {
+            $mark = " [$([char]0x2713) UPSCALED]"
+        }
+        Write-Host ("{0}. {1}{2}" -f ($i + 1), $title, $mark)
     }
     Write-Host '0. Exit'
     $pick = Read-Host 'Select study'
