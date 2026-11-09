@@ -158,6 +158,11 @@ class PatientsAndCloudTests(unittest.TestCase):
             self.assertNotEqual(user1,pipeline.subject_id(first))
         self.assertEqual(baseline,pipeline.subject_id(first))
 
+    def test_cloud_destination_rejects_reserved_windows_study_names(self):
+        for name in ("CON", "NUL", "COM1", "LPT9", "../outside", "C:/drive"):
+            with self.subTest(name=name), self.assertRaises(cloud.CloudError):
+                cloud.validate_study_name(name)
+
     def test_provider_allowlist_and_expiry(self):
         for bad in ["http://disk.yandex.ru/a","https://example.com/data",
                     "https://user:pw@disk.yandex.ru/d/x",
