@@ -483,3 +483,73 @@ CI runs synthetic-only tests. Do not claim a validated PACNI time-series
 from these derived scans. If more complete original 3D T1 images are found
 later, keep them under the existing `MRI/<study>` directory and prefer
 the original analysis over the synthetic version.
+
+## Patients (local identity, non-destructive merges, selective cloud DICOM)
+
+The launcher now starts with a **Patients** screen. No patient name is hardcoded.
+All labels, aliases, merges and imported MRI live locally in Git/Docker-ignored
+`patients/`. Existing historical studies stay at `MRI/` without modification.
+
+- `N` creates a local patient label (letters, digits, spaces), with a stable
+  `patients/p_<UUID>/MRI/` directory. Labels live only in `patients/registry.json`.
+- `D` reads locally available DICOM PatientName/PatientID (optional pydicom,
+  conservative built-in fallback). Explicit `REGISTER` creates and assigns
+  unambiguous identities. Identical names with different PatientIDs are not
+  merged automatically; unknown studies stay unassigned.
+- `A` manually attributes existing legacy MRI studies to a patient, without
+  moving or changing their prior FreeSurfer/PACNI IDs.
+- In a selected patient, `M` persists an operator-confirmed patient merge.
+  Both source roots remain physically unchanged and accessible through one
+  logical patient; old names become aliases. This preserves historical
+  reconstruction paths, cache signatures, and patient provenance.
+- All nested MRI processing actions are limited to the selected patient's
+  visible MRI studies. New patient data have distinct DICOM import, FreeSurfer
+  and SynthSR IDs, even if two patients have the same scan folder name.
+
+### C. Public read-only cloud intake (research / local operator confirmation)
+
+Supported cloud folder listings:
+- **Yandex Disk**: public HTTPS link, no credentials.
+- **Google Drive**: public folder HTTPS link plus `PACNI_GOOGLE_API_KEY`.
+- **Dropbox**: shared folder HTTPS link plus read-only `PACNI_DROPBOX_TOKEN`.
+
+Set only the relevant environment variable in PowerShell before starting
+the app. Never put API keys, public access URLs or patient metadata in Git.
+
+```powershell
+$env:PACNI_GOOGLE_API_KEY = '<restricted Google API key>'
+# Or, for Dropbox:
+$env:PACNI_DROPBOX_TOKEN = '<read-only Dropbox OAuth token>'
+.\start.cmd
+```
+
+Every link must be **read-only, download-enabled and expire at the provider**.
+Operators enter the expiry date (up to 14 days) locally, but this date does
+**not** revoke the remote link: expiry/revocation must be configured in Drive.
+
+Selective workflow: provider metadata listing (paginated/bounded) -> DICOM
+header byte-range previews (max 256 KiB per file) -> T1 candidate list with
+native 3D T1 ranked above experimental 2D T1 / SynthSR-only -> explicit
+series selection -> check every selected file's SeriesInstanceUID/PatientID
+without full download -> `IMPORT` confirmation -> download only that series
+to an atomic local staging directory -> check received DICOM IDs again.
+
+T2, FLAIR, TOF, DWI, localizers, ZIP and non-DICOM content are not treated as
+native T1. Mixed series, uncertain headers, unsupported partial reads,
+unrecognized hosts, oversized listings/files, expired links and network
+errors fail closed, never falling back to a full-folder download.
+
+Cloud links are passed in transient process environment, never stored or
+printed. Patient files and metadata are excluded from both Git and Docker
+build contexts. This application never uploads patient MRI to GitHub or
+ChatGPT. Real cloud link acceptance, anatomical coverage and radiological
+quality require operator validation; no clinical confidence is implied.
+
+Some public cloud links do not permit API folder listing or HTTP Range.
+Google requires an API key to enumerate public folder contents, and Dropbox
+requires a scoped token. Such links are rejected until a compatible connector
+can provide selective reads; arbitrary cloud/ZIP links are not supported.
+
+API references: https://developers.google.com/workspace/drive/api/guides/search-files ;
+https://docs.dropboxapi.com/dropbox-api/api-reference/user-endpoints/files/list-folder ;
+https://yandex.com/dev/disk/rest/
