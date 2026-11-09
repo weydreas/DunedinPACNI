@@ -37,7 +37,7 @@ def validate_name(name: str) -> str:
 
 def default_registry():
     return {"schema_version": 1, "patients": {}, "aliases": {},
-            "legacy_owner": None, "merges": []}
+            "legacy_owner": None, "legacy_assignments": {}, "merges": []}
 
 
 def load_registry():
@@ -51,6 +51,9 @@ def load_registry():
             or not isinstance(obj.get("aliases"), dict)
             or not isinstance(obj.get("merges"), list)):
         raise PatientError("Invalid patient registry; manual recovery required")
+    obj.setdefault("legacy_assignments", {})
+    if not isinstance(obj["legacy_assignments"], dict):
+        raise PatientError("Invalid legacy assignments")
     return obj
 
 
@@ -109,13 +112,24 @@ def legacy_studies():
     return sorted(p for p in LEGACY.iterdir() if p.is_dir() and not p.is_symlink())
 
 
-def assign_legacy(patient_id):
+def legacy_patient(study_name, obj=None):
+    obj = obj or load_registry()
+    return obj.get("legacy_assignments", {}).get(study_name) or obj.get("legacy_owner")
+
+
+def assign_legacy(patient_id, study_name=None):
     obj = load_registry()
     patient_id = resolve_patient(patient_id, obj)
-    current = obj.get("legacy_owner")
-    if current and current != patient_id:
-        raise PatientError("Legacy MRI root is already assigned to another patient")
-    obj["legacy_owner"] = patient_id
+    available = {p.name for p in legacy_studies()}
+    targets = [study_name] if study_name is not None else sorted(available)
+    if not targets or any(n not in available for n in targets):
+        raise PatientError("Missing legacy study folder")
+    for name in targets:
+        current = legacy_patient(name, obj)
+        if current and current != patient_id:
+            raise PatientError("Legacy MRI study is assigned to a different patient")
+    for name in targets:
+        obj["legacy_assignments"][name] = patient_id
     save_registry(obj)
 
 
@@ -171,6 +185,9 @@ def merge_patients(target, source):
             obj["aliases"][label] = target
     if obj.get("legacy_owner") == source:
         obj["legacy_owner"] = target
+    for study, pid in list(obj.get("legacy_assignments", {}).items()):
+        if pid == source:
+            obj["legacy_assignments"][study] = target
     obj["merges"].append({"source": source, "target": target, "source_label": source_rec["label"],
                           "utc": datetime.now(timezone.utc).isoformat(), "mode": "non_destructive_alias_union"})
     save_registry(obj)
@@ -183,7 +200,8 @@ def all_patient_roots(patient_id, obj=None):
     roots = [root_for(pid)]
     for linked in obj["patients"][pid].get("linked_roots", []):
         roots.append(root_for(linked))
-    if obj.get("legacy_owner") == pid:
+    if (obj.get("legacy_owner") == pid
+            or pid in obj.get("legacy_assignments", {}).values()):
         roots.insert(0, LEGACY)
     return roots
 
@@ -194,11 +212,17 @@ def active_patient_label(patient_id):
 
 
 def patient_studies(patient_id):
+    obj = load_registry()
+    pid = resolve_patient(patient_id, obj)
     result = []
-    for root in all_patient_roots(patient_id):
+    for root in all_patient_roots(pid, obj):
         if root.is_dir() and not root.is_symlink():
-            result.extend((root, p) for p in sorted(root.iterdir())
-                          if p.is_dir() and not p.is_symlink())
+            for study in sorted(root.iterdir()):
+                if not study.is_dir() or study.is_symlink():
+                    continue
+                if root == LEGACY and legacy_patient(study.name, obj) != pid:
+                    continue
+                result.append((root, study))
     return result
 
 
