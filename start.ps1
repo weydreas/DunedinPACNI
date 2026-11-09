@@ -228,7 +228,15 @@ while ($true) {
         }
         continue
     }
-    if ($pick -eq 'D') { Invoke-PatientAction 'discover' '' ''; continue }
+    if ($pick -eq 'D') {
+        Invoke-PatientAction 'discover' '' ''
+        Write-Host 'Patient names are read from local DICOM headers, not inferred from folder names.'
+        Write-Host 'Only unambiguous PatientName+PatientID pairs can be registered.'
+        if ((Read-Host 'Type REGISTER to create patients and assign discovered studies') -eq 'REGISTER') {
+            Invoke-PatientAction 'register-discovered' '' ''
+        }
+        continue
+    }
     $index = 0
     if ([int]::TryParse($pick, [ref]$index) -and $index -ge 1 -and $index -le $persons.Count) {
         Show-PatientMenu $persons[$index - 1]
