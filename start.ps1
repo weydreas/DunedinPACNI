@@ -73,6 +73,7 @@ while ($true) {
         Write-Host '7. Show study statuses'
         Write-Host '8. Compare acquisition metadata across years'
         Write-Host '9. Set up/check FreeSurfer license (one time)'
+        Write-Host '10. Show study report and DunedinPACNI conclusion'
         Write-Host '0. Back'
         $action = Read-Host 'Choose action'
         if ($action -eq '0') { break }
@@ -86,6 +87,7 @@ while ($true) {
             '7' { Invoke-Pipeline 'list' $Study }
             '8' { Invoke-Pipeline 'compare' $Study }
             "9" { $ok = Invoke-LicenseSetup; Read-Host 'Press Enter to continue' | Out-Null }
+            '10' { Invoke-Pipeline 'report' $Study }
         }
     }
 }
