@@ -4,8 +4,10 @@ All images and reconstructed outputs stay on local disk. Docker Desktop
 (Linux containers), Python 3.9+, and a private FreeSurfer license are required.
 """
 import argparse
+import csv
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -268,6 +270,144 @@ def quality_gate(study):
     return report
 
 
+def build_study_report(study):
+    """Build an evidence-based research summary without starting Docker or altering MRI."""
+    out = RESULTS / subject_id(study)
+    folder = subject_dir(study)
+    lines = [
+        "DunedinPACNI — отчет по исследованию",
+        "Исследование: " + study.name,
+        "ID реконструкции: " + subject_id(study),
+        "",
+    ]
+
+    image = None
+    provenance_ok = False
+    try:
+        image = select_input(study)
+        lines.append("T1: " + str(image.relative_to(study)))
+        try:
+            provenance(study, image)
+            provenance_ok = True
+        except (PipelineError, OSError, ValueError) as error:
+            lines.append("Целостность входных данных: НЕ ПОДТВЕРЖДЕНА (" +
+                         str(error) + ")")
+    except (PipelineError, OSError) as error:
+        lines.append("T1: не найден или не выбран (" + str(error) + ")")
+
+    finished = completed(study)
+    if finished:
+        lines.append("FreeSurfer recon-all: завершен (recon-all.done)")
+    elif folder.is_dir():
+        lines.append("FreeSurfer recon-all: не завершен; обнаружен рабочий каталог")
+    else:
+        lines.append("FreeSurfer recon-all: не запускался / нет результатов")
+    structurally_valid = False
+    try:
+        evidence = inspect(study)
+        structurally_valid = evidence["structural_qc"] == "pass"
+    except (OSError, ValueError) as error:
+        lines.append("Автоматический структурный QC: ошибка чтения (" + str(error) + ")")
+    if structurally_valid:
+        lines.append("Автоматический структурный QC: пройден (проверены файлы статистики)")
+    elif finished:
+        lines.append("Автоматический структурный QC: не пройден; требуется пункт 4")
+    else:
+        lines.append("Автоматический структурный QC: пока недоступен")
+    lines.append("Визуальная оценка сегментации: не выполнялась автоматически")
+
+    metadata_path = study / "scan.json"
+    if metadata_path.is_file():
+        try:
+            acquisition = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if isinstance(acquisition, dict):
+                seq = acquisition.get("sequence")
+                field = acquisition.get("field_strength_t")
+                if seq:
+                    lines.append("Протокол: " + str(seq))
+                if field:
+                    lines.append("Поле сканера: " + str(field) + " Тл")
+        except (OSError, ValueError):
+            lines.append("Метаданные сканирования: повреждены или не читаются")
+
+    lines.extend(["", "РЕЗУЛЬТАТ / ЗАКЛЮЧЕНИЕ"])
+    result_path = out / "pacni.csv"
+    run_path = out / "run.json"
+    if not finished or not structurally_valid or not provenance_ok:
+        lines.append("Численный результат DunedinPACNI недоступен для подтвержденной интерпретации.")
+        if not finished:
+            lines.append("Что делать: запустить/завершить пункт 3 (FreeSurfer recon-all).")
+        elif not structurally_valid:
+            lines.append("Что делать: проверить/выполнить пункт 4 (структурный QC).")
+        else:
+            lines.append("Что делать: проверить выбранный T1 и согласованность метаданных.")
+    elif not result_path.is_file() or not run_path.is_file():
+        lines.append("DunedinPACNI еще не рассчитан; данных FreeSurfer недостаточно для числа.")
+        lines.append("Что делать: выполнить пункт 5 (DunedinPACNI score).")
+    else:
+        try:
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            if not isinstance(run, dict) or run.get("study") != study.name:
+                raise ValueError("run.json does not match the selected study")
+            if run.get("result") != "pacni.csv":
+                raise ValueError("run.json does not reference pacni.csv")
+            if run.get("freesurfer_image") != FS_IMAGE:
+                raise ValueError("FreeSurfer version differs from current configuration")
+            with result_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                if not reader.fieldnames or not {"ID", "pacni"}.issubset(reader.fieldnames):
+                    raise ValueError("CSV must include ID and pacni columns")
+                records = list(reader)
+            if len(records) != 1 or records[0]["ID"] != subject_id(study):
+                raise ValueError("CSV participant ID or row count mismatch")
+            value = float(records[0]["pacni"])
+            if not math.isfinite(value):
+                raise ValueError("Invalid non-finite pacni value")
+            lines.append("DunedinPACNI: " + format(value, ".5f"))
+            lines.append("Модель: " + (
+                "без показателей GWR" if not run.get("gwr_available", False)
+                else "с показателями GWR"
+            ))
+            lines.append(
+                "Интерпретация: исследовательская оценка темпа биологического старения "
+                "по структурной МРТ, а не «возраст мозга» в годах."
+            )
+            lines.append(
+                "Более высокое значение соответствует более быстрому темпу "
+                "по шкале модели; для индивидуального диагноза и оценки "
+                "изменения во времени одной точки недостаточно."
+            )
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError) as error:
+            lines.append("Численный результат найден, но не прошел проверку: " +
+                         str(error))
+            lines.append("Результат нельзя интерпретировать; проверь пункт 5 и файлы расчета.")
+
+    lines.extend([
+        "",
+        "ОГРАНИЧЕНИЯ",
+        "Автоматический QC проверяет наличие и структуру файлов, но не качество "
+        "границ мозга, поверхностей и анатомической сегментации.",
+        "Перед выводами требуется визуальная проверка FreeSurfer.",
+        "DunedinPACNI не является радиологическим заключением или диагнозом.",
+        "Модель разработана с FreeSurfer 6.0; текущая конфигурация использует "
+        + FS_IMAGE + ".",
+        "Сравнение разных лет требует сопоставимых сканеров/протоколов "
+        "и одинаковой методики обработки.",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def report_study(study):
+    """Show the complete local report and keep a UTF-8 copy for later inspection."""
+    summary = build_study_report(study)
+    output = RESULTS / subject_id(study) / "report.txt"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(summary, encoding="utf-8")
+    print(summary)
+    print("Отчет сохранен:", output)
+    return output
+
+
 def score(study):
     image = select_input(study)
     provenance(study, image)
@@ -356,7 +496,7 @@ def compare_study_metadata():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare"])
+    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare", "report"])
     parser.add_argument("study", nargs="?")
     args = parser.parse_args()
     if args.command == "compare":
@@ -379,6 +519,9 @@ def main():
     if args.command == "convert":
         subprocess.run([sys.executable, str(ROOT / "scripts" / "dicom_import.py"),
                         study.name], check=True)
+        return
+    if args.command == "report":
+        report_study(study)
         return
     if args.command == "preflight":
         print("T1:", select_input(study))
