@@ -199,6 +199,7 @@ The PowerShell menu has numbered actions:
 7. List all detected studies and their processing statuses.
 8. Compare acquisition metadata across scans (where provided).
 9. Set up or check a personal FreeSurfer license (one-time).
+10. Show a local, read-only study report and research interpretation.
 
 The first run downloads the pinned freesurfer/freesurfer:7.4.1 Docker image and
 builds a local R 4.3.2 image using the code in this fork. The original model
@@ -383,3 +384,36 @@ The original MRI/ folder and config/license.txt are not altered by recovery.
 
 As before, completing the FreeSurfer run does not establish visual
 segmentation QC or DunedinPACNI validity. Those need the later checks.
+
+## View the result for a selected MRI (menu 10)
+
+Select the study (for example, "2015.07 МРТ Головного мозга"),
+then choose **10. Show study report and DunedinPACNI conclusion**.
+
+The report is displayed in the PowerShell window and saved to UTF-8 text:
+
+    results/<subject-id>/report.txt
+
+This command does not launch Docker, FreeSurfer or R. It displays:
+- selected T1 input and its provenance/integrity;
+- FreeSurfer recon-all completion and automatic structural QC status;
+- numerical DunedinPACNI score only with finished FreeSurfer, valid output,
+  a matching input signature, CSV subject ID and matching run metadata;
+- whether gray-white ratio (GWR) was available;
+- conservative interpretation, limitations and next action.
+
+**DunedinPACNI is a research-based pace-of-aging score, not anatomical
+brain age in years, a clinical threshold, or a radiology diagnosis.**
+No normal/abnormal classifications are assigned without supported reference
+intervals. Automated structural QC cannot substitute for visual QC.
+
+If FreeSurfer or scoring is unfinished, menu 10 gives its actual status
+rather than inventing results. After successful recon, use action 4 for QC
+and action 5 to score, or 6 for the full pipeline.
+
+Command-line equivalent:
+
+    py -3 scripts/mri_pipeline.py report "2015.07 МРТ Головного мозга"
+
+Reports remain local under Git-ignored results/; avoid sharing private
+scan identifiers or derived medical findings in public commits.
