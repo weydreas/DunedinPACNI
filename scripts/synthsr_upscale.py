@@ -29,7 +29,7 @@ def safe_print(*parts, **options):
         print(fallback, **options)
 
 ROOT = Path(__file__).resolve().parents[1]
-MRI = ROOT / "MRI"
+MRI = Path(os.environ.get("PACNI_MRI_ROOT", str(ROOT / "MRI"))).resolve()
 IMPORTS = ROOT / "work" / "imports"
 UPSCALED = ROOT / "work" / "upscaled"
 SYNTHSR_REF = "04ab5548f4609c2b44ca51b3f4bc319b585dafa7"
@@ -54,8 +54,11 @@ class UpscaleError(RuntimeError):
 
 def study_id(study):
     slug = re.sub(r"[^A-Za-z0-9_]", "_", study.name)[:30] or "scan"
-    digest = hashlib.sha256(study.name.encode("utf-8")).hexdigest()[:10]
-    return "pacni_" + slug + "_" + digest
+    namespace = os.environ.get("PACNI_PATIENT_ID", "")
+    if namespace and not re.fullmatch(r"p_[0-9a-f]{32}", namespace):
+        raise ValueError("Invalid PACNI_PATIENT_ID")
+    identity = (namespace + ":" if namespace else "") + study.name
+    return "pacni_" + slug + "_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
 
 
 def storage(study):
