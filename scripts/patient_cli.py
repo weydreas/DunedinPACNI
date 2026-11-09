@@ -17,6 +17,13 @@ def menu_json():
                                       if not reg.legacy_patient(p.name, obj)],
         "legacy_owner": obj.get("legacy_owner"),
     }
+    if not data["patients"] and data["unassigned_legacy_studies"]:
+        # Read only a few original headers; this never changes the registry.
+        # Unknown or conflicting DICOM identities are shown as unresolved.
+        scan = reg.discover_local_patient_names()
+        data["detected_local"] = [{"study": study, "name": value["label"]}
+                                  for study, value in sorted(scan["found"].items())]
+        data["unknown_local_count"] = len(scan["unknown_studies"])
     print(json.dumps(data, ensure_ascii=True))
 
 
