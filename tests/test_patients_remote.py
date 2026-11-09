@@ -198,6 +198,37 @@ class PatientsAndCloudTests(unittest.TestCase):
                 cloud.validate_entire_series("https://disk.yandex.ru/d/a",entry)
             download.assert_not_called()
 
+    def test_success_downloads_only_selected_uid_without_link_persistence(self):
+        pid=patients.create_patient("CLIENT9")
+        payload=dicom_bytes(series="1.2.3.44")
+        listed=[
+            {"name":f"IM{i:04d}","parent":"/T1","path":f"/T1/IM{i:04d}",
+             "size":len(payload),"provider":"yandex"} for i in range(16)
+        ]
+        extra={"name":"IMFLAIR","parent":"/FLAIR","path":"/FLAIR/IMFLAIR",
+               "size":len(payload),"provider":"yandex"}
+        option={"folder":"/T1","uid":"1.2.3.44","files":listed,
+                "size":len(payload)*16,"description":"T1 MPRAGE","count":16}
+        download_calls=[]
+        def download(share,entry,dest,fetch=None):
+            download_calls.append(entry["path"])
+            dest.write_bytes(payload)
+            return len(payload)
+        answers=iter(["1","2026.11.09","IMPORT"])
+        with mock.patch.object(cloud,"list_cloud",return_value=listed+[extra]), \
+             mock.patch.object(cloud,"discover_series",return_value=[option]), \
+             mock.patch.object(cloud,"validate_entire_series",return_value=True), \
+             mock.patch.object(cloud,"download_file",side_effect=download):
+            cloud.interactive(pid,"https://disk.yandex.ru/d/public",
+                datetime.date.today().isoformat(),input_fn=lambda prompt:next(answers))
+        root=patients.root_for(pid)/"2026.11.09"
+        self.assertTrue(root.is_dir())
+        self.assertEqual(len(list(root.glob("*.dcm"))),16)
+        self.assertNotIn("/FLAIR/IMFLAIR",download_calls)
+        manifest=(root/"cloud-import.json").read_text(encoding="utf-8")
+        self.assertNotIn("https://disk.yandex.ru/d/public",manifest)
+        self.assertIn("series_uid_sha256",manifest)
+
     def test_cloud_interactive_cancel_does_not_create_patient_mri(self):
         pid=patients.create_patient("CLIENT7")
         file={"name":"IM0001","parent":"/folder","path":"/folder/IM0001",
