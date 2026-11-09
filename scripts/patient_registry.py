@@ -7,6 +7,7 @@ atomic; destructive operations are deliberately not implicit.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import shutil
@@ -227,36 +228,87 @@ def patient_studies(patient_id):
 
 
 def discover_local_patient_names(limit_per_study=3):
-    """Best-effort no-network identification from local DICOM headers.
+    """Read a few *original local DICOM* headers; never infer identities from paths.
 
-    pydicom is optional; unknown patient stays UNKNOWN, never guessed from a
-    folder name or auto-merged based on initials.
+    pydicom is preferred for PatientName encodings; a conservative built-in
+    explicit/implicit little-endian header reader is a dependency-free fallback.
+    Ambiguous studies remain unassigned for manual attribution.
     """
     try:
         import pydicom
     except ImportError:
-        return {"status": "pydicom_missing", "found": {}, "unknown_studies": [p.name for p in legacy_studies()]}
+        pydicom = None
     found = {}
     unknown = []
     for study in legacy_studies():
         observed = set()
         count = 0
-        for p in study.rglob("*"):
+        for item in study.rglob("*"):
             if count >= limit_per_study:
                 break
-            if not p.is_file() or p.is_symlink() or p.suffix.lower() in {".json",".nii",".gz",".mgz"}:
+            if not item.is_file() or item.is_symlink() or item.suffix.lower() in {".json",".nii",".gz",".mgz",".txt",".csv"}:
                 continue
             try:
-                header = pydicom.dcmread(str(p), stop_before_pixels=True,
-                                        specific_tags=["PatientName"], force=False)
-                name = str(getattr(header, "PatientName", "")).replace("^", " ").strip()
-                if name:
-                    observed.add(validate_name(name))
+                if pydicom is not None:
+                    header = pydicom.dcmread(str(item), stop_before_pixels=True,
+                                            specific_tags=["PatientName","PatientID"],force=False)
+                    name = str(getattr(header,"PatientName","")).replace("^"," ").strip()
+                    uid = str(getattr(header,"PatientID","")).strip()
+                else:
+                    # Imported lazily, avoiding a circular module import.
+                    from remote_mri import parse_dicom
+                    with item.open("rb") as stream:
+                        header = parse_dicom(stream.read(262144))
+                    name = header.get("patient_name","").replace("^"," ").strip()
+                    uid = header.get("patient_id","").strip()
+                name = validate_name(name)
+                if uid and len(uid) <= 64:
+                    observed.add((name, uid))
                     count += 1
             except Exception:
                 continue
         if len(observed) == 1:
-            found[study.name] = next(iter(observed))
+            label, uid = next(iter(observed))
+            found[study.name] = {"label": label,
+                                 "patient_id_sha256": hashlib.sha256(uid.encode("utf-8")).hexdigest()}
         else:
             unknown.append(study.name)
     return {"status": "scanned", "found": found, "unknown_studies": unknown}
+
+
+def register_discovered():
+    """Explicitly requested registration of unambiguous DICOM-based identities.
+
+    Exact name + PatientID is the identity key, not surname/initials alone.
+    Distinct IDs with same name are skipped for manual resolution, never merged.
+    """
+    scan = discover_local_patient_names()
+    obj = load_registry()
+    buckets = {}
+    for study, value in scan["found"].items():
+        if legacy_patient(study, obj):
+            continue
+        label = value["label"]
+        digest = value["patient_id_sha256"]
+        buckets.setdefault(label.casefold(), {}).setdefault(digest, []).append((study,label))
+    added = []
+    conflicted = []
+    for normalized, variants in sorted(buckets.items()):
+        if len(variants) != 1:
+            conflicted.extend(x[0] for series in variants.values() for x in series)
+            continue
+        studies = next(iter(variants.values()))
+        label = studies[0][1]
+        existing = obj["aliases"].get(normalized)
+        if existing:
+            # No safe proof the known identity belongs to the same PatientID:
+            # require an explicit manual assignment instead of auto-merging.
+            conflicted.extend(study for study,_ in studies)
+            continue
+        pid = create_patient(label)
+        for study, _ in studies:
+            assign_legacy(pid, study)
+            added.append({"label": label, "study": study})
+        obj = load_registry()
+    return {"registered": added, "conflicted": conflicted,
+            "unknown_studies": scan["unknown_studies"]}
