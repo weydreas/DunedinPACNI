@@ -4,8 +4,10 @@ All images and reconstructed outputs stay on local disk. Docker Desktop
 (Linux containers), Python 3.9+, and a private FreeSurfer license are required.
 """
 import argparse
+import csv
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -16,6 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MRI = ROOT / "MRI"
 SUBJECTS = ROOT / "work" / "freesurfer"
+PROVENANCE = ROOT / "work" / "provenance"
 RESULTS = ROOT / "results"
 LICENSE = ROOT / "config" / "license.txt"
 FS_IMAGE = os.environ.get("PACNI_FS_IMAGE", "freesurfer/freesurfer:7.4.1")
@@ -111,17 +114,77 @@ def subject_dir(study):
     return SUBJECTS / subject_id(study)
 
 
+def provenance_path(study):
+    """Store pipeline input provenance OUTSIDE FreeSurfer-managed subject dirs."""
+    return PROVENANCE / (subject_id(study) + ".json")
+
+
 def provenance(study, image):
     folder = subject_dir(study)
-    metadata = folder / "pacni-input.json"
+    if folder.is_symlink():
+        raise PipelineError("Refusing to reuse a symlinked FreeSurfer subject directory")
     wanted = {"signature": signature(study, image), "fs_image": FS_IMAGE}
-    if metadata.exists():
-        found = json.loads(metadata.read_text(encoding="utf-8"))
-        if any(found.get(k) != v for k, v in wanted.items()):
-            raise PipelineError("MRI input or FreeSurfer version changed: use a fresh scan folder")
-    elif folder.exists():
-        raise PipelineError("FreeSurfer output lacks provenance; not safe to reuse")
+    # Old launcher wrote provenance inside the subject before calling -i,
+    # which made FreeSurfer reject every initial import. Still read legacy
+    # records to allow safe and backwards-compatible recovery.
+    external = provenance_path(study)
+    legacy = folder / "pacni-input.json"
+    found_any = False
+    for record in (external, legacy):
+        if record.is_symlink():
+            raise PipelineError("Refusing to use symlinked provenance file")
+        if record.exists():
+            found_any = True
+            found = json.loads(record.read_text(encoding="utf-8"))
+            if any(found.get(k) != v for k, v in wanted.items()):
+                raise PipelineError(
+                    "MRI input or FreeSurfer version changed: use a fresh scan folder")
+    if folder.exists() and not found_any:
+        raise PipelineError(
+            "FreeSurfer subject exists without input provenance; "
+            "inspect before reusing or resetting it")
     return wanted
+
+
+def record_provenance(study, image, wanted):
+    """Persist provenance before processing, without creating subject dir."""
+    path = provenance_path(study)
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = dict(wanted, study=study.name,
+                   source=image.relative_to(study).as_posix())
+    # Atomic replace prevents a partial JSON record after interruption.
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def recover_launcher_stub(study):
+    """Clean ONLY the exact one-file stub created by the old broken launcher.
+
+    Do not delete any actual FreeSurfer output, including partial processing,
+    and never delete an entire uninspected subject directory.
+    """
+    folder = subject_dir(study)
+    if not folder.exists():
+        return
+    if folder.is_symlink() or not folder.is_dir():
+        raise PipelineError("Unexpected FreeSurfer subject path; refusing cleanup")
+    contents = list(folder.iterdir())
+    if len(contents) == 1 and contents[0].name == "pacni-input.json" \
+            and contents[0].is_file() and not contents[0].is_symlink():
+        # By this point provenance() has validated the legacy record and
+        # record_provenance() has copied it to a safe external location.
+        contents[0].unlink()
+        folder.rmdir()
+        print("Recovered the metadata-only stub from the prior launcher.")
+        return
+    if not contents:
+        # An empty directory has no reconstruction; FreeSurfer needs to own
+        # the directory creation during the initial -i import.
+        folder.rmdir()
+        print("Removed empty FreeSurfer subject directory before initial import.")
 
 
 def completed(study):
@@ -136,15 +199,24 @@ def reconstruct(study):
     if completed(study):
         print("FreeSurfer already completed; reusing verified output.")
         return
-    was_started = subject_dir(study).is_dir()
-    already_imported = (subject_dir(study) / "mri" / "orig" / "001.mgz").is_file()
+
+    # Crucial invariant from the official FreeSurfer recon-all documentation:
+    # -i must be provided only when the subject directory DOES NOT EXIST.
+    # During resume, the already-imported 001.mgz is reused without -i.
+    record_provenance(study, image, meta)
     SUBJECTS.mkdir(parents=True, exist_ok=True)
-    subject_dir(study).mkdir(exist_ok=True)
-    info = subject_dir(study) / "pacni-input.json"
-    if not info.exists():
-        info.write_text(json.dumps(dict(meta, study=study.name,
-                                       source=image.relative_to(study).as_posix()),
-                                   indent=2), encoding="utf-8")
+    recover_launcher_stub(study)
+    folder = subject_dir(study)
+    if folder.exists() and folder.is_symlink():
+        raise PipelineError("Refusing to use symlinked subject directory")
+    already_imported = (folder / "mri" / "orig" / "001.mgz").is_file()
+    if folder.exists() and not already_imported:
+        raise PipelineError(
+            "FreeSurfer subject directory exists but mri/orig/001.mgz is absent. "
+            "This is not a metadata-only stub; inspect the folder and "
+            "recon-all.log before deciding whether to reset it. "
+            "No files were deleted."
+        )
     args = [
         "docker", "run", "--rm",
         "--mount", "type=bind,source=" + str(study.resolve()) + ",target=/input,readonly",
@@ -154,14 +226,12 @@ def reconstruct(study):
         "-e", "SUBJECTS_DIR=/subjects", "-e", "FS_LICENSE=/opt/pacni-license.txt",
         FS_IMAGE, "recon-all", "-sd", "/subjects", "-s", subject_id(study)
     ]
-    if not was_started or not already_imported:
-        # Import can be missing if a prior run failed before its first MRI step.
+    if not already_imported:
         args.extend(["-i", "/input/" + image.relative_to(study).as_posix()])
     args.extend(["-all", "-parallel", "-openmp", str(min(os.cpu_count() or 2, 8))])
     sh(args)
     if not completed(study):
         raise PipelineError("FreeSurfer did not create recon-all.done; inspect recon-all.log")
-
 
 def inspect(study):
     folder = subject_dir(study)
@@ -198,6 +268,144 @@ def quality_gate(study):
     if report["structural_qc"] != "pass":
         raise PipelineError("Incomplete or invalid FreeSurfer stats; scoring blocked")
     return report
+
+
+def build_study_report(study):
+    """Build an evidence-based research summary without starting Docker or altering MRI."""
+    out = RESULTS / subject_id(study)
+    folder = subject_dir(study)
+    lines = [
+        "DunedinPACNI — отчет по исследованию",
+        "Исследование: " + study.name,
+        "ID реконструкции: " + subject_id(study),
+        "",
+    ]
+
+    image = None
+    provenance_ok = False
+    try:
+        image = select_input(study)
+        lines.append("T1: " + str(image.relative_to(study)))
+        try:
+            provenance(study, image)
+            provenance_ok = True
+        except (PipelineError, OSError, ValueError) as error:
+            lines.append("Целостность входных данных: НЕ ПОДТВЕРЖДЕНА (" +
+                         str(error) + ")")
+    except (PipelineError, OSError) as error:
+        lines.append("T1: не найден или не выбран (" + str(error) + ")")
+
+    finished = completed(study)
+    if finished:
+        lines.append("FreeSurfer recon-all: завершен (recon-all.done)")
+    elif folder.is_dir():
+        lines.append("FreeSurfer recon-all: не завершен; обнаружен рабочий каталог")
+    else:
+        lines.append("FreeSurfer recon-all: не запускался / нет результатов")
+    structurally_valid = False
+    try:
+        evidence = inspect(study)
+        structurally_valid = evidence["structural_qc"] == "pass"
+    except (OSError, ValueError) as error:
+        lines.append("Автоматический структурный QC: ошибка чтения (" + str(error) + ")")
+    if structurally_valid:
+        lines.append("Автоматический структурный QC: пройден (проверены файлы статистики)")
+    elif finished:
+        lines.append("Автоматический структурный QC: не пройден; требуется пункт 4")
+    else:
+        lines.append("Автоматический структурный QC: пока недоступен")
+    lines.append("Визуальная оценка сегментации: не выполнялась автоматически")
+
+    metadata_path = study / "scan.json"
+    if metadata_path.is_file():
+        try:
+            acquisition = json.loads(metadata_path.read_text(encoding="utf-8"))
+            if isinstance(acquisition, dict):
+                seq = acquisition.get("sequence")
+                field = acquisition.get("field_strength_t")
+                if seq:
+                    lines.append("Протокол: " + str(seq))
+                if field:
+                    lines.append("Поле сканера: " + str(field) + " Тл")
+        except (OSError, ValueError):
+            lines.append("Метаданные сканирования: повреждены или не читаются")
+
+    lines.extend(["", "РЕЗУЛЬТАТ / ЗАКЛЮЧЕНИЕ"])
+    result_path = out / "pacni.csv"
+    run_path = out / "run.json"
+    if not finished or not structurally_valid or not provenance_ok:
+        lines.append("Численный результат DunedinPACNI недоступен для подтвержденной интерпретации.")
+        if not finished:
+            lines.append("Что делать: запустить/завершить пункт 3 (FreeSurfer recon-all).")
+        elif not structurally_valid:
+            lines.append("Что делать: проверить/выполнить пункт 4 (структурный QC).")
+        else:
+            lines.append("Что делать: проверить выбранный T1 и согласованность метаданных.")
+    elif not result_path.is_file() or not run_path.is_file():
+        lines.append("DunedinPACNI еще не рассчитан; данных FreeSurfer недостаточно для числа.")
+        lines.append("Что делать: выполнить пункт 5 (DunedinPACNI score).")
+    else:
+        try:
+            run = json.loads(run_path.read_text(encoding="utf-8"))
+            if not isinstance(run, dict) or run.get("study") != study.name:
+                raise ValueError("run.json does not match the selected study")
+            if run.get("result") != "pacni.csv":
+                raise ValueError("run.json does not reference pacni.csv")
+            if run.get("freesurfer_image") != FS_IMAGE:
+                raise ValueError("FreeSurfer version differs from current configuration")
+            with result_path.open("r", encoding="utf-8-sig", newline="") as stream:
+                reader = csv.DictReader(stream)
+                if not reader.fieldnames or not {"ID", "pacni"}.issubset(reader.fieldnames):
+                    raise ValueError("CSV must include ID and pacni columns")
+                records = list(reader)
+            if len(records) != 1 or records[0]["ID"] != subject_id(study):
+                raise ValueError("CSV participant ID or row count mismatch")
+            value = float(records[0]["pacni"])
+            if not math.isfinite(value):
+                raise ValueError("Invalid non-finite pacni value")
+            lines.append("DunedinPACNI: " + format(value, ".5f"))
+            lines.append("Модель: " + (
+                "без показателей GWR" if not run.get("gwr_available", False)
+                else "с показателями GWR"
+            ))
+            lines.append(
+                "Интерпретация: исследовательская оценка темпа биологического старения "
+                "по структурной МРТ, а не «возраст мозга» в годах."
+            )
+            lines.append(
+                "Более высокое значение соответствует более быстрому темпу "
+                "по шкале модели; для индивидуального диагноза и оценки "
+                "изменения во времени одной точки недостаточно."
+            )
+        except (OSError, ValueError, KeyError, TypeError, UnicodeError) as error:
+            lines.append("Численный результат найден, но не прошел проверку: " +
+                         str(error))
+            lines.append("Результат нельзя интерпретировать; проверь пункт 5 и файлы расчета.")
+
+    lines.extend([
+        "",
+        "ОГРАНИЧЕНИЯ",
+        "Автоматический QC проверяет наличие и структуру файлов, но не качество "
+        "границ мозга, поверхностей и анатомической сегментации.",
+        "Перед выводами требуется визуальная проверка FreeSurfer.",
+        "DunedinPACNI не является радиологическим заключением или диагнозом.",
+        "Модель разработана с FreeSurfer 6.0; текущая конфигурация использует "
+        + FS_IMAGE + ".",
+        "Сравнение разных лет требует сопоставимых сканеров/протоколов "
+        "и одинаковой методики обработки.",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def report_study(study):
+    """Show the complete local report and keep a UTF-8 copy for later inspection."""
+    summary = build_study_report(study)
+    output = RESULTS / subject_id(study) / "report.txt"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(summary, encoding="utf-8")
+    print(summary)
+    print("Отчет сохранен:", output)
+    return output
 
 
 def score(study):
@@ -261,7 +469,9 @@ def compare_study_metadata():
     # scanner metadata are unavailable.
     recon_versions = {}
     for study in studies():
-        source = subject_dir(study) / "pacni-input.json"
+        source = provenance_path(study)
+        if not source.is_file():
+            source = subject_dir(study) / "pacni-input.json"
         if source.is_file():
             value = json.loads(source.read_text(encoding="utf-8")).get("fs_image")
             if value:
@@ -286,7 +496,7 @@ def compare_study_metadata():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare"])
+    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare", "report"])
     parser.add_argument("study", nargs="?")
     args = parser.parse_args()
     if args.command == "compare":
@@ -309,6 +519,9 @@ def main():
     if args.command == "convert":
         subprocess.run([sys.executable, str(ROOT / "scripts" / "dicom_import.py"),
                         study.name], check=True)
+        return
+    if args.command == "report":
+        report_study(study)
         return
     if args.command == "preflight":
         print("T1:", select_input(study))
