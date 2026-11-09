@@ -569,17 +569,21 @@ def compare_study_metadata():
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare", "report", "upscale", "all-synthsr", "report-synthsr"])
+    parser.add_argument("command", choices=["list", "convert", "preflight", "recon", "qc", "score", "all", "compare", "report", "upscale", "all-synthsr", "report-synthsr", "upscale-status"])
     parser.add_argument("study", nargs="?")
     args = parser.parse_args()
     if args.command == "compare":
         compare_study_metadata()
         return
+    if args.command == "upscale-status":
+        print(json.dumps({study.name: bool(synth_index(study)) for study in studies()},
+                         ensure_ascii=True))
+        return
     if args.command == "list":
         if not studies():
             print("Place scans under MRI/<study>/")
         for study in studies():
-            mark = " [✓ UPSCALED via SynthSR]" if synth_index(study) else ""
+            mark = " [UPSCALED via SynthSR]" if synth_index(study) else ""
             try:
                 image = select_input(study)
                 status = "[complete]" if completed(study) else "[not processed]"
