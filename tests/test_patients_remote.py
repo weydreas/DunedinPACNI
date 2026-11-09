@@ -118,10 +118,12 @@ class PatientsAndCloudTests(unittest.TestCase):
                   "size":10000,"provider":"yandex"} for i in range(30)]
         def fake_fetch(url,headers=None,post=None,max_bytes=None):
             return (206,{},dicom_bytes())
-        options = cloud.discover_series("https://disk.yandex.ru/d/a",files,fetch=fake_fetch)
+        with mock.patch.object(cloud,"media_request",return_value=("https://cloud-api.yandex.net/fake",{},None)):
+            options = cloud.discover_series("https://disk.yandex.ru/d/a",files,fetch=fake_fetch)
         self.assertEqual(len(options),1)
         self.assertEqual(options[0]["count"],30)
-        cloud.validate_entire_series("https://disk.yandex.ru/d/a",options[0],fetch=fake_fetch)
+        with mock.patch.object(cloud,"media_request",return_value=("https://cloud-api.yandex.net/fake",{},None)):
+            cloud.validate_entire_series("https://disk.yandex.ru/d/a",options[0],fetch=fake_fetch)
         with mock.patch.object(cloud,"preview_dicom",return_value={"modality":"MR","series_uid":"1.2.3.44","description":"T2 FLAIR"}):
             self.assertEqual(cloud.discover_series("https://disk.yandex.ru/d/a",files),[])
 
@@ -151,9 +153,10 @@ class PatientsAndCloudTests(unittest.TestCase):
              mock.patch.object(cloud,"validate_entire_series",return_value=True), \
              mock.patch.object(cloud,"download_file") as download:
             future=datetime.date.today().isoformat()
+            iter_answers=iter(["1","2025-05-01","CANCEL"])
             with self.assertRaises(cloud.CloudError):
                 cloud.interactive(pid,"https://disk.yandex.ru/d/test",future,
-                                  input_fn=iter(["1","2025-05-01","CANCEL"]).__next__)
+                                  input_fn=lambda prompt: next(iter_answers))
             download.assert_not_called()
         self.assertEqual(list(patients.root_for(pid).iterdir()),[])
 
