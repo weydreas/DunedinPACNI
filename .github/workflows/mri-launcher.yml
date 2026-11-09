@@ -50,6 +50,8 @@ jobs:
         run: |
           docker run --rm --network none biodata-synthsr:ci --help
           docker run --rm --network none --entrypoint python biodata-synthsr:ci -c "from pathlib import Path; import tensorflow as tf; p=Path('/opt/py_synthsr/py_synthsr/models/synthsr_v20_230130.h5'); assert p.is_file() and p.stat().st_size > 1000000; print('SynthSR model ready; TensorFlow:', tf.__version__)"
+      - name: Print SHA-256 of the external SynthSR v2 model for provenance pinning
+        run: docker run --rm --network none --entrypoint sha256sum biodata-synthsr:ci /opt/py_synthsr/py_synthsr/models/synthsr_v20_230130.h5
       - name: Run actual CPU SynthSR inference on a generated nonclinical phantom
         run: |
           mkdir -p "$RUNNER_TEMP/synthsr-smoke"
