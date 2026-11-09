@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MRI = ROOT / "MRI"
+MRI = Path(os.environ.get("PACNI_MRI_ROOT", str(ROOT / "MRI"))).resolve()
 SUBJECTS = ROOT / "work" / "freesurfer"
 PROVENANCE = ROOT / "work" / "provenance"
 RESULTS = ROOT / "results"
@@ -79,7 +79,11 @@ def subject_id(study, variant="original"):
     if variant != "original":
         raise PipelineError("Unknown input variant")
     slug = re.sub(r"[^A-Za-z0-9_]", "_", study.name)[:30] or "scan"
-    digest = hashlib.sha256(study.name.encode("utf-8")).hexdigest()[:10]
+    namespace = os.environ.get("PACNI_PATIENT_ID", "")
+    if namespace and not re.fullmatch(r"p_[0-9a-f]{32}", namespace):
+        raise PipelineError("Invalid PACNI_PATIENT_ID namespace")
+    identity = (namespace + ":" if namespace else "") + study.name
+    digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
     return "pacni_" + slug + "_" + digest
 
 
