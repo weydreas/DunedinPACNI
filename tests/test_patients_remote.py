@@ -18,7 +18,7 @@ import patient_registry as patients
 import remote_mri as cloud
 
 
-def dicom_bytes(series="1.2.3.44", patient="C0007", contrast="T1 MPRAGE"):
+def dicom_bytes(series="1.2.3.44", patient="C0007", contrast="T1 MPRAGE", acquisition="3D", thickness="1.0"):
     """Build just a valid little-endian explicit VR test header."""
     data = bytearray(128) + bytearray(b"DICM")
     def tag(group, element, vr, value):
@@ -29,8 +29,10 @@ def dicom_bytes(series="1.2.3.44", patient="C0007", contrast="T1 MPRAGE"):
     data += tag(0x0008, 0x0060, "CS", "MR")
     data += tag(0x0008, 0x103e, "LO", contrast)
     data += tag(0x0010, 0x0020, "LO", patient)
+    data += tag(0x0018, 0x0023, "CS", acquisition)
+    data += tag(0x0018, 0x0050, "DS", thickness)
     data += tag(0x0020, 0x000e, "UI", series)
-    return bytes(data).ljust(262144,b"\0")
+    return bytes(data).ljust(cloud.MAX_PREVIEW,b"\0")
 
 
 class PatientsAndCloudTests(unittest.TestCase):
@@ -188,6 +190,35 @@ class PatientsAndCloudTests(unittest.TestCase):
             cloud.validate_entire_series("https://disk.yandex.ru/d/a",options[0],fetch=fake_fetch)
         with mock.patch.object(cloud,"preview_dicom",return_value={"modality":"MR","series_uid":"1.2.3.44","description":"T2 FLAIR"}):
             self.assertEqual(cloud.discover_series("https://disk.yandex.ru/d/a",files),[])
+
+    def test_mixed_remote_directory_discovers_only_t1_by_uid(self):
+        files=[]
+        for prefix,n in [("T1",70),("T2",45),("SE",27)]:
+            files.extend([
+                {"name":f"{prefix}{i:04d}.dcm","parent":"/all",
+                 "path":f"/all/{prefix}{i:04d}.dcm","size":10000,"provider":"yandex"}
+                for i in range(n)
+            ])
+        def media(share,file,preview=False):
+            return ("https://cloud-api.yandex.net/"+file["name"], {}, None)
+        def peek(url,headers=None,post=None,max_bytes=None):
+            filename=url.rsplit("/",1)[-1]
+            if filename.startswith("T1"):
+                payload=dicom_bytes("1.2.3.1",contrast="3D T1 MPRAGE")
+            elif filename.startswith("T2"):
+                payload=dicom_bytes("1.2.3.2",contrast="Ax T2 FLAIR")
+            else:
+                payload=dicom_bytes("1.2.3.3",contrast="Cor T1 SE",acquisition="2D",
+                                    thickness="6.5")
+            return (206,{},payload)
+        with mock.patch.object(cloud,"media_request",side_effect=media):
+            selected=cloud.discover_series("https://disk.yandex.ru/d/test",files,fetch=peek)
+        self.assertEqual(len(selected),2)
+        self.assertEqual(selected[0]["grade"],"NATIVE_3D_T1_CANDIDATE")
+        self.assertEqual(selected[0]["count"],70)
+        self.assertEqual(selected[1]["grade"],"SYNTHSR_ONLY_CANDIDATE")
+        self.assertEqual(selected[1]["count"],27)
+        self.assertNotIn("Ax T2 FLAIR",[x["description"] for x in selected])
 
     def test_refuse_mixed_uid_before_full_download(self):
         files = [{"name":f"IM{i:04d}","parent":"/SE1","path":f"/SE1/IM{i:04d}",
