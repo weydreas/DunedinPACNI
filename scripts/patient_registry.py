@@ -121,24 +121,18 @@ def assign_legacy(patient_id):
 
 def list_patients():
     obj = load_registry()
-    return [(pid, data["label"], (len(legacy_studies()) if obj.get("legacy_owner") == pid else 0)
-             + len(list(root_for(pid).iterdir())) if root_for(pid).is_dir() else 0)
-            for pid, data in sorted(obj["patients"].items(), key=lambda e:e[1]["label"].casefold())]
+    return [(pid, record["label"], len(patient_studies(pid)))
+            for pid, record in sorted(obj["patients"].items(),
+                                      key=lambda row: row[1]["label"].casefold())]
 
 
 def study_roots(patient_id):
-    obj = load_registry()
-    patient_id = resolve_patient(patient_id, obj)
-    folder = root_for(patient_id)
-    roots = [folder]
-    if obj.get("legacy_owner") == patient_id:
-        roots.insert(0, LEGACY)
-    return roots
+    return all_patient_roots(patient_id)
 
 
 def studies_for(patient_id):
     found = []
-    for root in study_roots(patient_id):
+    for root in all_patient_roots(patient_id):
         if root.is_dir() and not root.is_symlink():
             for study in sorted(root.iterdir()):
                 if study.is_dir() and not study.is_symlink():
@@ -192,6 +186,11 @@ def all_patient_roots(patient_id, obj=None):
     if obj.get("legacy_owner") == pid:
         roots.insert(0, LEGACY)
     return roots
+
+
+def active_patient_label(patient_id):
+    obj = load_registry()
+    return obj["patients"][resolve_patient(patient_id, obj)]["label"]
 
 
 def patient_studies(patient_id):
