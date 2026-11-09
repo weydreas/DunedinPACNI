@@ -200,7 +200,7 @@ def record_provenance(study, image, wanted, variant="original"):
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     relative = (image.relative_to(study) if variant == "original"
-                else image.relative_to(ROOT))
+                else image.resolve().relative_to(ROOT.resolve()))
     payload = dict(wanted, study=study.name, source=relative.as_posix())
     # Atomic replace prevents a partial JSON record after interruption.
     tmp = path.with_name(path.name + ".tmp")
@@ -339,7 +339,8 @@ def build_study_report(study, variant="original"):
     provenance_ok = False
     try:
         image = active_input(study, variant)
-        display = image.relative_to(study) if variant == "original" else image.relative_to(ROOT)
+        display = (image.relative_to(study) if variant == "original"
+                   else image.resolve().relative_to(ROOT.resolve()))
         lines.append("T1: " + str(display))
         try:
             provenance(study, image, variant)
