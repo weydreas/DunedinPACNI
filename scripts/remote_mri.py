@@ -455,6 +455,10 @@ def validate_expiry(date_str):
 def validate_study_name(name):
     name = name.strip()
     if (not 1 <= len(name) <= 90 or name in {".",".."}
+            or name.split(".")[0].upper() in {"CON", "PRN", "AUX", "NUL",
+                "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+                "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7",
+                "LPT8", "LPT9"}
             or not re.fullmatch(r"[A-Za-z0-9А-Яа-яЁё _.-]+", name)
             or name.endswith((".", " "))):
         raise CloudError("Use a short safe study label: letters, numbers, space, underscore, hyphen, dot")
@@ -485,6 +489,9 @@ def interactive(patient_id, share, expiry, input_fn=input):
     validate_entire_series(share, selected)
     new_name = validate_study_name(input_fn("Local MRI study folder name (date included): "))
     dest_root = patients.root_for(patient_id)
+    if (patients.DATA.is_symlink() or dest_root.parent.is_symlink()
+            or dest_root.is_symlink() or not dest_root.is_dir()):
+        raise CloudError("Patient destination is missing or symlinked; no download")
     dest = dest_root / new_name
     if dest.exists() or dest.is_symlink():
         raise CloudError("MRI study directory already exists; no overwrite")
