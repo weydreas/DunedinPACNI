@@ -1,0 +1,23 @@
+# Standalone SynthSR CPU runtime; never put patient images or license inside.
+FROM python:3.11-slim-bookworm
+
+ARG SYNTHSR_REF=04ab5548f4609c2b44ca51b3f4bc319b585dafa7
+ENV TF_CPP_MIN_LOG_LEVEL=2 CUDA_VISIBLE_DEVICES=-1 PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --filter=blob:none https://github.com/neurolabusc/py_synthsr.git /opt/py_synthsr \
+    && cd /opt/py_synthsr \
+    && git checkout --detach ${SYNTHSR_REF} \
+    && test "$(git rev-parse HEAD)" = "${SYNTHSR_REF}" \
+    && mkdir -p py_synthsr/models \
+    && curl --fail --location --retry 3 https://osf.io/download/jqdcm/ -o /tmp/models.zip \
+    && unzip -jo /tmp/models.zip '*synthsr_v20_230130.h5' -d py_synthsr/models \
+    && test -s py_synthsr/models/synthsr_v20_230130.h5 \
+    && rm -f /tmp/models.zip \
+    && pip install --no-cache-dir 'tensorflow-cpu==2.15.1' nibabel scipy \
+    && pip install --no-cache-dir --no-deps /opt/py_synthsr \
+    && python -c "import py_synthsr, tensorflow; print('SynthSR TensorFlow', tensorflow.__version__)"
+
+ENTRYPOINT ["py_synthsr"]
