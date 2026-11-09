@@ -87,6 +87,8 @@ def create_patient(label):
     if label.casefold() in obj["aliases"]:
         raise PatientError("A patient with this name or alias already exists")
     patient_id = "p_" + uuid.uuid4().hex
+    if DATA.is_symlink():
+        raise PatientError("Refusing symlinked patient data root")
     root = root_for(patient_id)
     root.mkdir(parents=True, exist_ok=False)
     obj["patients"][patient_id] = {"label": label, "created_utc": datetime.now(timezone.utc).isoformat()}
