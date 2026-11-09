@@ -27,7 +27,7 @@ function Invoke-LicenseSetup {
 }
 
 function Invoke-Pipeline([string]$Action, [string]$Study) {
-    if ($Action -in @('preflight', 'recon', 'all') -and -not (Test-Path -LiteralPath $FreeSurferLicense)) {
+    if ($Action -in @('preflight', 'recon', 'all', 'all-synthsr') -and -not (Test-Path -LiteralPath $FreeSurferLicense)) {
         Write-Host 'FreeSurfer license is not installed; starting one-time setup.' -ForegroundColor Yellow
         $licenseReady = Invoke-LicenseSetup
         if (-not $licenseReady) {
@@ -64,6 +64,9 @@ while ($true) {
     while ($true) {
         Clear-Host
         Write-Host "Selected MRI: $Study" -ForegroundColor Cyan
+        $active = @($Prefix) + @($Backend, 'list', $Study)
+        & $Python @active
+        Write-Host ''
         Write-Host '1. Stage 0: Convert nested DICOM series to 3D T1 NIfTI'
         Write-Host '2. Preflight (T1, Docker, FreeSurfer license)'
         Write-Host '3. Stage 1: FreeSurfer recon-all'
@@ -74,6 +77,10 @@ while ($true) {
         Write-Host '8. Compare acquisition metadata across years'
         Write-Host '9. Set up/check FreeSurfer license (one time)'
         Write-Host '10. Show study report and DunedinPACNI conclusion'
+        Write-Host '11. Upscale your MRI (SynthSR: SYNTHETIC, not diagnostic)'
+        Write-Host '12. Process upscaled MRI (research-only PACNI, no GWR)'
+        Write-Host '13. Show upscaled MRI report (research-only)'
+        Write-Host '   WARNING: SynthSR predicts brain anatomy; lesions may be hidden!'
         Write-Host '0. Back'
         $action = Read-Host 'Choose action'
         if ($action -eq '0') { break }
@@ -88,6 +95,9 @@ while ($true) {
             '8' { Invoke-Pipeline 'compare' $Study }
             "9" { $ok = Invoke-LicenseSetup; Read-Host 'Press Enter to continue' | Out-Null }
             '10' { Invoke-Pipeline 'report' $Study }
+            '11' { Invoke-Pipeline 'upscale' $Study }
+            '12' { Invoke-Pipeline 'all-synthsr' $Study }
+            '13' { Invoke-Pipeline 'report-synthsr' $Study }
         }
     }
 }
