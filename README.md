@@ -200,6 +200,10 @@ The PowerShell menu has numbered actions:
 8. Compare acquisition metadata across scans (where provided).
 9. Set up or check a personal FreeSurfer license (one-time).
 10. Show a local, read-only study report and research interpretation.
+11. **Upscale your MRI (SynthSR):** explicit selection of a converted original
+    series, generate synthetic 1mm MPRAGE in a separate local derivative.
+12. **Process upscaled MRI:** FreeSurfer → QC → DunedinPACNI on that derivative.
+13. Show a separate research report for the synthetic variant.
 
 The first run downloads the pinned freesurfer/freesurfer:7.4.1 Docker image and
 builds a local R 4.3.2 image using the code in this fork. The original model
@@ -417,3 +421,61 @@ Command-line equivalent:
 
 Reports remain local under Git-ignored results/; avoid sharing private
 scan identifiers or derived medical findings in public commits.
+
+## SynthSR — upscale your MRI (research only)
+
+**Official tool:** SynthSR uses a learned model of brain anatomy to synthesize
+a 1-mm isotropic T1 MPRAGE from a clinical MRI scan of variable contrast.
+It is NOT a restoration of measured slices. SynthSR may fill lesions with
+normal-appearing tissue. NEVER diagnose or exclude pathology from its output.
+Read the original MRI and original radiology report for clinical conclusions.
+Sources: https://freesurfer.net/fswiki/SynthSR and
+https://pmc.ncbi.nlm.nih.gov/articles/PMC9891693/ .
+
+**One MRI study, not two.** The acquisition stays in `MRI/<study>/`.
+Converted DICOM series remain in `work/imports/<study-id>/converted/`.
+Synthesized outputs are stored under
+`work/upscaled/<study-id>/<source-sha16>/T1_synthsr.nii.gz`.
+The linked `work/upscaled/<study-id>/index.json` records original study/date,
+selected source series and geometry, SHA-256 hashes, SynthSR code revision
+and derived output. Replacing/changing the original invalidates the derivative
+marker, which prevents stale results from being reused unnoticed.
+The **study selection list shows one entry only** with `[✓ UPSCALED via SynthSR]`
+when a verified derivative exists. Reprocessing another source still belongs
+to that one acquisition; previous derivatives are not deleted.
+
+How to use on Windows:
+
+1. Put the original 2018/2021 DICOM images in their existing study folder.
+2. Choose menu action 1 to run dcm2niix. Even when the importer reports no
+   eligible native 3D T1, the full converted series list and files remain
+   available under `work/imports/` for SynthSR source selection.
+3. Choose **11. Upscale your MRI**. Select one full-brain series from the list,
+   preferably with the original image visually checked for whole-brain coverage.
+   Localizers, angiographic TOF, DWI and obvious pituitary-only small
+   field-of-view volumes are excluded by screening, but coverage must still
+   be confirmed visually. Type `UPSCALE` for the costly inference step.
+4. A separate CPU Docker image is built the first time. It pins the
+   `neurolabusc/py_synthsr` source to commit
+   `04ab5548f4609c2b44ca51b3f4bc319b585dafa7` and downloads the publicly
+   hosted SynthSR v2 model at build time. This environment does not alter
+   `freesurfer/freesurfer:7.4.1` or require a FreeSurfer license for
+   the synthesis step itself. Docker execution disables networking and
+   mounts the selected original file read-only.
+5. To process the synthetic 1-mm T1 (research only), choose menu action 12;
+   use 13 to read its separate report. The original analysis menu items
+   continue using **original measured T1 only**.
+
+Original and SynthSR analyses have different FreeSurfer subject IDs and
+result directories within the SAME study. They are not two independent MRIs.
+For SynthSR, PACNI **always uses the no-GWR coefficient model** because
+the synthetic T1 contrast does not provide a valid measured GWR.
+Never mix or directly compare synthetic-model scores with original-T1
+scores without empirical calibration and quality validation.
+
+Current limitation: local real-data SynthSR Docker build, model download,
+inference and visual brain coverage have not been verified in automated CI;
+CI runs synthetic-only tests. Do not claim a validated PACNI time-series
+from these derived scans. If more complete original 3D T1 images are found
+later, keep them under the existing `MRI/<study>` directory and prefer
+the original analysis over the synthetic version.
