@@ -13,8 +13,8 @@ def menu_json():
                       "study_count": len(reg.patient_studies(pid))}
                      for pid, record in sorted(obj["patients"].items(),
                                                key=lambda v: v[1]["label"].casefold())],
-        "unassigned_legacy_studies": [p.name for p in reg.legacy_studies()]
-                                  if not obj.get("legacy_owner") else [],
+        "unassigned_legacy_studies": [p.name for p in reg.legacy_studies()
+                                      if not reg.legacy_patient(p.name, obj)],
         "legacy_owner": obj.get("legacy_owner"),
     }
     print(json.dumps(data, ensure_ascii=True))
@@ -44,7 +44,7 @@ def main():
             parser.error("Missing name")
         print(reg.create_patient(args.a))
     elif args.command == "attach-legacy":
-        reg.assign_legacy(args.a)
+        reg.assign_legacy(args.a, args.b)
         print("Existing MRI studies attached without moving files")
     elif args.command == "merge":
         reg.merge_patients(args.a, args.b)
