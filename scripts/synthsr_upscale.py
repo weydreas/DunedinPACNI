@@ -23,7 +23,7 @@ UPSCALED = ROOT / "work" / "upscaled"
 SYNTHSR_REF = "04ab5548f4609c2b44ca51b3f4bc319b585dafa7"
 SYNTHSR_IMAGE = os.getenv("PACNI_SYNTHSR_IMAGE", "biodata-synthsr:04ab5548")
 WARNING = (
-    "CAUTION / ИССЛЕДОВАТЕЛЬСКОЕ ИЗОБРАЖЕНИЕ: SynthSR predicts missing anatomy "
+    "WARNING: SYNTHETIC RESEARCH IMAGE. SynthSR predicts missing anatomy "
     "using a learned brain model; this is NOT a measured or diagnostically "
     "reliable MRI. Lesions can be inpainted as healthy tissue. "
     "NEVER use the synthetic image to exclude pathology or replace a "
@@ -234,7 +234,7 @@ def upscale(study, input_fn=input, run_fn=None):
     stage = store / ".index.tmp"
     stage.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(stage, store / "index.json")
-    print("✓ UPSCALED (derived; not a new MRI acquisition):", output)
+    print("[UPSCALED] (derived; not a new MRI acquisition):", output)
     print("Original remains untouched:", p)
     print(WARNING)
     return output
