@@ -470,7 +470,14 @@ def interactive(patient_id, share, expiry, input_fn=input):
             name = f"{n:05d}_" + (suffix or "dicom")
             if not name.lower().endswith((".dcm", ".ima")):
                 name += ".dcm"
-            download_file(share, entry, staging / name)
+            downloaded = staging / name
+            download_file(share, entry, downloaded)
+            # The source can change after metadata preflight. Verify the
+            # received full file still belongs to the selected series.
+            with downloaded.open("rb") as stream:
+                measured = parse_dicom(stream.read(MAX_PREVIEW))
+            if measured.get("series_uid") != selected["uid"] or measured.get("modality") != "MR":
+                raise CloudError("Downloaded DICOM does not match selected series; import rolled back")
         # No shared links or personal DICOM identifiers in Git or public logs.
         (staging / "cloud-import.json").write_text(
             json.dumps({"provider":provider, "count":len(selected["files"]),
