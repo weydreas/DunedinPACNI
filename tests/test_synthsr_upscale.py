@@ -152,9 +152,39 @@ class SynthSRTests(unittest.TestCase):
         self.generate()
         text = pipeline.build_study_report(self.study, "synthsr")
         self.assertIn("СИНТЕТИЧЕСКИЙ", text)
-        self.assertIn("патологических", text) if False else None
         self.assertIn("патологические", text)
         self.assertIn("GWR исключен", text)
+
+    def test_synthsr_scoring_forces_no_gwr_and_separate_result(self):
+        self.import_series([("Cor T1 SE", (256, 256, 27), (.859, .859, 6.5))])
+        self.generate()
+        out = pipeline.RESULTS / pipeline.subject_id(self.study, "synthsr")
+        calls = []
+
+        def synthetic_qc(study, variant="original"):
+            self.assertEqual(variant, "synthsr")
+            out.mkdir(parents=True, exist_ok=True)
+            return {"gwr_available": True, "structural_qc": "pass"}
+
+        def fake_shell(args):
+            calls.append(args)
+            if "Rscript" in args:
+                (out / "synthetic_df_pacni.csv").write_text(
+                    "ID,pacni\n" + pipeline.subject_id(self.study, "synthsr") +
+                    ",0.8\n", encoding="utf-8"
+                )
+
+        with mock.patch.object(pipeline, "quality_gate", side_effect=synthetic_qc), \
+             mock.patch.object(pipeline, "check_docker"), \
+             mock.patch.object(pipeline, "sh", side_effect=fake_shell):
+            pipeline.score(self.study, "synthsr")
+        run = json.loads((out / "run.json").read_text(encoding="utf-8"))
+        self.assertEqual(run["source_variant"], "synthsr")
+        self.assertTrue(run["synthetic"])
+        self.assertFalse(run["gwr_available"])
+        rcmd = next(cmd for cmd in calls if "Rscript" in cmd)
+        self.assertEqual(rcmd[-1], "TRUE")
+        self.assertFalse((pipeline.RESULTS / pipeline.subject_id(self.study)).exists())
 
     def test_no_processing_when_manifest_is_foreign_study(self):
         self.import_series([("Cor T1 SE", (256, 256, 27), (.859, .859, 6.5))])
