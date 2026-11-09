@@ -33,7 +33,7 @@ def studies_json(patient):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["menu", "create", "attach-legacy",
-                        "merge", "studies", "discover"])
+                        "merge", "studies", "discover", "register-discovered"])
     parser.add_argument("a", nargs="?")
     parser.add_argument("b", nargs="?")
     args = parser.parse_args()
@@ -53,6 +53,8 @@ def main():
         studies_json(args.a)
     elif args.command == "discover":
         print(json.dumps(reg.discover_local_patient_names(), ensure_ascii=True))
+    elif args.command == "register-discovered":
+        print(json.dumps(reg.register_discovered(), ensure_ascii=True))
 
 
 if __name__ == "__main__":
