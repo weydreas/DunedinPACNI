@@ -59,7 +59,19 @@ class PipelineError(Exception):
 def studies():
     if not MRI.exists():
         return []
-    return sorted((p for p in MRI.iterdir() if p.is_dir() and not p.is_symlink()),
+    visible = os.environ.get("PACNI_VISIBLE_STUDIES")
+    if visible is not None:
+        try:
+            names = json.loads(visible)
+            if not isinstance(names, list) or any(not isinstance(n, str) for n in names):
+                raise ValueError("Malformed patient study allowlist")
+            allowed = set(names)
+        except (ValueError, TypeError):
+            raise PipelineError("Malformed PACNI_VISIBLE_STUDIES; refusing to expose MRI directory")
+    else:
+        allowed = None
+    return sorted((p for p in MRI.iterdir() if p.is_dir() and not p.is_symlink()
+                   and (allowed is None or p.name in allowed)),
                   key=lambda p: p.name.casefold())
 
 
