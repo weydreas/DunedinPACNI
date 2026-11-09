@@ -27,7 +27,7 @@ function Invoke-LicenseSetup {
 }
 
 function Invoke-Pipeline([string]$Action, [string]$Study) {
-    if ($Action -in @('preflight', 'recon', 'all') -and -not (Test-Path -LiteralPath $FreeSurferLicense)) {
+    if ($Action -in @('preflight', 'recon', 'all', 'all-synthsr') -and -not (Test-Path -LiteralPath $FreeSurferLicense)) {
         Write-Host 'FreeSurfer license is not installed; starting one-time setup.' -ForegroundColor Yellow
         $licenseReady = Invoke-LicenseSetup
         if (-not $licenseReady) {
@@ -51,9 +51,27 @@ while ($true) {
     Write-Host 'Place original DICOM folders (SE000000 etc.) under MRI\<study>\ or add T1.nii.gz'
     Write-Host ''
     $Studies = @(Get-ChildItem -LiteralPath $Mri -Directory | Sort-Object Name)
+    $UpscaledStates = @{}
+    try {
+        $statusArgs = @($Prefix) + @($Backend, 'upscale-status')
+        $jsonState = (& $Python @statusArgs) -join ''
+        if ($LASTEXITCODE -eq 0 -and $jsonState) {
+            $stateObj = $jsonState | ConvertFrom-Json
+            foreach ($entry in $stateObj.PSObject.Properties) {
+                $UpscaledStates[$entry.Name] = [bool]$entry.Value
+            }
+        }
+    } catch {
+        Write-Host 'Upscale status not available; study list remains unchanged.' -ForegroundColor Yellow
+    }
     if ($Studies.Count -eq 0) { Write-Host 'No MRI studies found.' -ForegroundColor Yellow }
     for ($i = 0; $i -lt $Studies.Count; $i++) {
-        Write-Host ("{0}. {1}" -f ($i + 1), $Studies[$i].Name)
+        $title = $Studies[$i].Name
+        $mark = ''
+        if ($UpscaledStates.ContainsKey($title) -and $UpscaledStates[$title]) {
+            $mark = " [$([char]0x2713) UPSCALED]"
+        }
+        Write-Host ("{0}. {1}{2}" -f ($i + 1), $title, $mark)
     }
     Write-Host '0. Exit'
     $pick = Read-Host 'Select study'
@@ -64,6 +82,9 @@ while ($true) {
     while ($true) {
         Clear-Host
         Write-Host "Selected MRI: $Study" -ForegroundColor Cyan
+        $active = @($Prefix) + @($Backend, 'list', $Study)
+        & $Python @active
+        Write-Host ''
         Write-Host '1. Stage 0: Convert nested DICOM series to 3D T1 NIfTI'
         Write-Host '2. Preflight (T1, Docker, FreeSurfer license)'
         Write-Host '3. Stage 1: FreeSurfer recon-all'
@@ -74,6 +95,10 @@ while ($true) {
         Write-Host '8. Compare acquisition metadata across years'
         Write-Host '9. Set up/check FreeSurfer license (one time)'
         Write-Host '10. Show study report and DunedinPACNI conclusion'
+        Write-Host '11. Upscale your MRI (SynthSR: SYNTHETIC, not diagnostic)'
+        Write-Host '12. Process upscaled MRI (research-only PACNI, no GWR)'
+        Write-Host '13. Show upscaled MRI report (research-only)'
+        Write-Host '   WARNING: SynthSR predicts brain anatomy; lesions may be hidden!'
         Write-Host '0. Back'
         $action = Read-Host 'Choose action'
         if ($action -eq '0') { break }
@@ -88,6 +113,9 @@ while ($true) {
             '8' { Invoke-Pipeline 'compare' $Study }
             "9" { $ok = Invoke-LicenseSetup; Read-Host 'Press Enter to continue' | Out-Null }
             '10' { Invoke-Pipeline 'report' $Study }
+            '11' { Invoke-Pipeline 'upscale' $Study }
+            '12' { Invoke-Pipeline 'all-synthsr' $Study }
+            '13' { Invoke-Pipeline 'report-synthsr' $Study }
         }
     }
 }
