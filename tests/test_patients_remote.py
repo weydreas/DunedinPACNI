@@ -208,7 +208,7 @@ class PatientsAndCloudTests(unittest.TestCase):
         extra={"name":"IMFLAIR","parent":"/FLAIR","path":"/FLAIR/IMFLAIR",
                "size":len(payload),"provider":"yandex"}
         option={"folder":"/T1","uid":"1.2.3.44","files":listed,
-                "size":len(payload)*16,"description":"T1 MPRAGE","count":16}
+                "size":len(payload)*16,"description":"T1 MPRAGE","grade":"SYNTHSR_ONLY_CANDIDATE","count":16}
         download_calls=[]
         def download(share,entry,dest,fetch=None):
             download_calls.append(entry["path"])
@@ -234,7 +234,7 @@ class PatientsAndCloudTests(unittest.TestCase):
         file={"name":"IM0001","parent":"/folder","path":"/folder/IM0001",
               "size":1000,"provider":"yandex"}
         option={"folder":"/folder","uid":"1.2.3","files":[file]*20,"size":20000,
-                "description":"T1 MPRAGE","count":20}
+                "description":"T1 MPRAGE","grade":"SYNTHSR_ONLY_CANDIDATE","count":20}
         with mock.patch.object(cloud,"list_cloud",return_value=[file]), \
              mock.patch.object(cloud,"discover_series",return_value=[option]), \
              mock.patch.object(cloud,"validate_entire_series",return_value=True), \
