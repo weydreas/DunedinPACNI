@@ -6,6 +6,7 @@ All images and reconstructed outputs stay on local disk. Docker Desktop
 import argparse
 import csv
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -26,6 +27,31 @@ R_IMAGE = os.environ.get("PACNI_R_IMAGE", "dunedinpacni-r:local")
 STATS = ("aseg.stats", "lh.aparc.stats", "rh.aparc.stats")
 
 
+def upscaler():
+    """Load optional SynthSR module without changing existing CLI imports."""
+    path = ROOT / "scripts" / "synthsr_upscale.py"
+    spec = importlib.util.spec_from_file_location("synthsr_upscale", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def synth_index(study):
+    return upscaler().read_index(study)
+
+
+def active_input(study, variant="original"):
+    if variant == "original":
+        return select_input(study)
+    if variant != "synthsr":
+        raise PipelineError("Unknown source variant: " + variant)
+    item = synth_index(study)
+    if not item:
+        raise PipelineError("No verified SynthSR derivative. Run Upscale your MRI first.")
+    return item["output_path"]
+
+
+
 class PipelineError(Exception):
     pass
 
@@ -44,7 +70,14 @@ def get_study(name):
     raise PipelineError("Study not found under MRI/: " + name)
 
 
-def subject_id(study):
+def subject_id(study, variant="original"):
+    if variant == "synthsr":
+        item = synth_index(study)
+        if not item:
+            raise PipelineError("SynthSR derivative missing or stale; rerun upscaling")
+        return subject_id(study) + "_synthsr_" + item["source_sha256"][:8]
+    if variant != "original":
+        raise PipelineError("Unknown input variant")
     slug = re.sub(r"[^A-Za-z0-9_]", "_", study.name)[:30] or "scan"
     digest = hashlib.sha256(study.name.encode("utf-8")).hexdigest()[:10]
     return "pacni_" + slug + "_" + digest
@@ -110,24 +143,35 @@ def check_license():
         raise PipelineError("FreeSurfer license missing: config/license.txt")
 
 
-def subject_dir(study):
-    return SUBJECTS / subject_id(study)
+def subject_dir(study, variant="original"):
+    return SUBJECTS / subject_id(study, variant)
 
 
-def provenance_path(study):
+def provenance_path(study, variant="original"):
     """Store pipeline input provenance OUTSIDE FreeSurfer-managed subject dirs."""
-    return PROVENANCE / (subject_id(study) + ".json")
+    return PROVENANCE / (subject_id(study, variant) + ".json")
 
 
-def provenance(study, image):
-    folder = subject_dir(study)
+def provenance(study, image, variant="original"):
+    folder = subject_dir(study, variant)
     if folder.is_symlink():
         raise PipelineError("Refusing to reuse a symlinked FreeSurfer subject directory")
-    wanted = {"signature": signature(study, image), "fs_image": FS_IMAGE}
+    if variant == "synthsr":
+        index = synth_index(study)
+        if not index or image.resolve() != index["output_path"].resolve():
+            raise PipelineError("SynthSR output or source link changed")
+        digest = hashlib.sha256(json.dumps({
+            "source_sha256": index["source_sha256"],
+            "output_sha256": index["output_sha256"],
+            "model_ref": index["model_ref"],
+        }, sort_keys=True).encode("utf-8")).hexdigest()
+    else:
+        digest = signature(study, image)
+    wanted = {"signature": digest, "fs_image": FS_IMAGE, "variant": variant}
     # Old launcher wrote provenance inside the subject before calling -i,
     # which made FreeSurfer reject every initial import. Still read legacy
     # records to allow safe and backwards-compatible recovery.
-    external = provenance_path(study)
+    external = provenance_path(study, variant)
     legacy = folder / "pacni-input.json"
     found_any = False
     for record in (external, legacy):
@@ -146,27 +190,27 @@ def provenance(study, image):
     return wanted
 
 
-def record_provenance(study, image, wanted):
+def record_provenance(study, image, wanted, variant="original"):
     """Persist provenance before processing, without creating subject dir."""
-    path = provenance_path(study)
+    path = provenance_path(study, variant)
     if path.exists():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = dict(wanted, study=study.name,
-                   source=image.relative_to(study).as_posix())
+                   source=image.relative_to(ROOT).as_posix())
     # Atomic replace prevents a partial JSON record after interruption.
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     os.replace(tmp, path)
 
 
-def recover_launcher_stub(study):
+def recover_launcher_stub(study, variant="original"):
     """Clean ONLY the exact one-file stub created by the old broken launcher.
 
     Do not delete any actual FreeSurfer output, including partial processing,
     and never delete an entire uninspected subject directory.
     """
-    folder = subject_dir(study)
+    folder = subject_dir(study, variant)
     if not folder.exists():
         return
     if folder.is_symlink() or not folder.is_dir():
@@ -187,26 +231,26 @@ def recover_launcher_stub(study):
         print("Removed empty FreeSurfer subject directory before initial import.")
 
 
-def completed(study):
-    return (subject_dir(study) / "scripts" / "recon-all.done").is_file()
+def completed(study, variant="original"):
+    return (subject_dir(study, variant) / "scripts" / "recon-all.done").is_file()
 
 
-def reconstruct(study):
-    image = select_input(study)
+def reconstruct(study, variant="original"):
+    image = active_input(study, variant)
     check_license()
     check_docker()
-    meta = provenance(study, image)
-    if completed(study):
+    meta = provenance(study, image, variant)
+    if completed(study, variant):
         print("FreeSurfer already completed; reusing verified output.")
         return
 
     # Crucial invariant from the official FreeSurfer recon-all documentation:
     # -i must be provided only when the subject directory DOES NOT EXIST.
     # During resume, the already-imported 001.mgz is reused without -i.
-    record_provenance(study, image, meta)
+    record_provenance(study, image, meta, variant)
     SUBJECTS.mkdir(parents=True, exist_ok=True)
-    recover_launcher_stub(study)
-    folder = subject_dir(study)
+    recover_launcher_stub(study, variant)
+    folder = subject_dir(study, variant)
     if folder.exists() and folder.is_symlink():
         raise PipelineError("Refusing to use symlinked subject directory")
     already_imported = (folder / "mri" / "orig" / "001.mgz").is_file()
@@ -217,26 +261,30 @@ def reconstruct(study):
             "recon-all.log before deciding whether to reset it. "
             "No files were deleted."
         )
+    # For SynthSR the generated T1 lives in work/upscaled, not MRI/<study>.
+    # Both versions are the SAME acquisition; only their analysis workspaces differ.
+    input_folder = study if variant == "original" else image.parent
     args = [
         "docker", "run", "--rm",
-        "--mount", "type=bind,source=" + str(study.resolve()) + ",target=/input,readonly",
+        "--mount", "type=bind,source=" + str(input_folder.resolve()) + ",target=/input,readonly",
         "--mount", "type=bind,source=" + str(SUBJECTS.resolve()) + ",target=/subjects",
         "--mount", "type=bind,source=" + str(LICENSE.resolve()) +
         ",target=/opt/pacni-license.txt,readonly",
         "-e", "SUBJECTS_DIR=/subjects", "-e", "FS_LICENSE=/opt/pacni-license.txt",
-        FS_IMAGE, "recon-all", "-sd", "/subjects", "-s", subject_id(study)
+        FS_IMAGE, "recon-all", "-sd", "/subjects", "-s", subject_id(study, variant)
     ]
     if not already_imported:
-        args.extend(["-i", "/input/" + image.relative_to(study).as_posix()])
+        args.extend(["-i", "/input/" + image.relative_to(input_folder).as_posix()])
     args.extend(["-all", "-parallel", "-openmp", str(min(os.cpu_count() or 2, 8))])
     sh(args)
-    if not completed(study):
+    if not completed(study, variant):
         raise PipelineError("FreeSurfer did not create recon-all.done; inspect recon-all.log")
 
-def inspect(study):
-    folder = subject_dir(study)
-    result = {"study": study.name, "subject_id": subject_id(study),
-              "recon_complete": completed(study),
+def inspect(study, variant="original"):
+    folder = subject_dir(study, variant)
+    result = {"study": study.name, "subject_id": subject_id(study, variant),
+              "source_variant": variant,
+              "recon_complete": completed(study, variant),
               "structural_qc": "fail", "visual_qc": "not_performed",
               "stats": {}, "gwr_available": False}
     if not result["recon_complete"]:
@@ -259,9 +307,9 @@ def inspect(study):
     return result
 
 
-def quality_gate(study):
-    report = inspect(study)
-    out = RESULTS / subject_id(study)
+def quality_gate(study, variant="original"):
+    report = inspect(study, variant)
+    out = RESULTS / subject_id(study, variant)
     out.mkdir(parents=True, exist_ok=True)
     (out / "qc.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
@@ -408,13 +456,13 @@ def report_study(study):
     return output
 
 
-def score(study):
-    image = select_input(study)
-    provenance(study, image)
-    report = quality_gate(study)
+def score(study, variant="original"):
+    image = active_input(study, variant)
+    provenance(study, image, variant)
+    report = quality_gate(study, variant)
     check_docker()
-    out = RESULTS / subject_id(study)
-    (out / "sublist.csv").write_text("ID\n" + subject_id(study) + "\n", encoding="utf-8")
+    out = RESULTS / subject_id(study, variant)
+    (out / "sublist.csv").write_text("ID\n" + subject_id(study, variant) + "\n", encoding="utf-8")
     sh(["docker", "build", "-f", str(ROOT / "docker" / "Dockerfile.pacni"),
         "-t", R_IMAGE, str(ROOT)])
     sh(["docker", "run", "--rm",
@@ -422,17 +470,22 @@ def score(study):
         ",target=/subjects,readonly",
         "--mount", "type=bind,source=" + str(out.resolve()) + ",target=/results",
         R_IMAGE, "Rscript", "/opt/pacni/run_pacni.R",
-        "/subjects", "/results", "FALSE" if report["gwr_available"] else "TRUE"])
+        # SynthSR invents contrast. Never treat its GWR as a measured signal.
+        "/subjects", "/results",
+        "TRUE" if variant == "synthsr" or not report["gwr_available"] else "FALSE"])
     files = sorted(out.glob("*_df_pacni.csv"), key=lambda p: p.stat().st_mtime_ns)
     if not files:
         raise PipelineError("No PACNI CSV produced by R")
     shutil.copyfile(files[-1], out / "pacni.csv")
     (out / "run.json").write_text(json.dumps({
         "study": study.name, "freesurfer_image": FS_IMAGE,
-        "gwr_available": report["gwr_available"],
+        "source_variant": variant, "synthetic": variant == "synthsr",
+        "gwr_available": report["gwr_available"] if variant == "original" else False,
         "result": "pacni.csv", "qc": "automatic checks only; visual inspection pending"
     }, indent=2), encoding="utf-8")
     print("PACNI result:", out / "pacni.csv")
+    if variant == "synthsr":
+        print("SYNTHETIC RESEARCH OUTPUT — anatomy and contrast are AI-generated; no GWR used.")
     print("PROVISIONAL: visual segmentation QC has not been performed.")
 
 
