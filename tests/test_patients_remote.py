@@ -75,7 +75,7 @@ class PatientsAndCloudTests(unittest.TestCase):
         self.assertEqual([(r.name,s.name) for r,s in patients.patient_studies(pid)],
                          [("MRI","2018-05")])
         self.assertEqual((old/"IM0001.dcm").read_bytes(),b"unchanged")
-        self.assertEqual(patients.load_registry()["legacy_owner"],pid)
+        self.assertEqual(patients.load_registry()["legacy_assignments"]["2018-05"],pid)
         with self.assertRaises(patients.PatientError):
             other=patients.create_patient("B CODE")
             patients.assign_legacy(other)
