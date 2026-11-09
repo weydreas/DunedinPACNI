@@ -53,6 +53,6 @@ jobs:
       - name: Run actual CPU SynthSR inference on a generated nonclinical phantom
         run: |
           mkdir -p "$RUNNER_TEMP/synthsr-smoke"
-          docker run --rm --network none --mount "type=bind,source=$RUNNER_TEMP/synthsr-smoke,target=/data" --entrypoint python biodata-synthsr:ci -c "import nibabel as nib, numpy as np; x,y,z=np.ogrid[:96,:96,:96]; r=((x-48)**2+(y-48)**2+(z-48)**2)**0.5; a=np.where(r<40, 120-2*r, 0).astype('float32'); nib.save(nib.Nifti1Image(a,np.eye(4)), '/data/input.nii.gz')"
+          docker run --rm --network none --mount "type=bind,source=$RUNNER_TEMP/synthsr-smoke,target=/data" --entrypoint python biodata-synthsr:ci -c "import nibabel as nib, numpy as np; x,y,z=np.ogrid[:192,:192,:192]; r=((x-96)**2+(y-96)**2+(z-96)**2)**0.5; a=np.where(r<75, 150-r, 0).astype('float32'); nib.save(nib.Nifti1Image(a,np.eye(4)), '/data/input.nii.gz')"
           docker run --rm --network none --mount "type=bind,source=$RUNNER_TEMP/synthsr-smoke,target=/data" biodata-synthsr:ci --i /data/input.nii.gz --o /data/output.nii.gz --disable_flipping --cpu --threads 2
           docker run --rm --network none --mount "type=bind,source=$RUNNER_TEMP/synthsr-smoke,target=/data,readonly" --entrypoint python biodata-synthsr:ci -c "import nibabel as nib, numpy as np; img=nib.load('/data/output.nii.gz'); assert img.ndim == 3; assert all(.9 < p < 1.1 for p in img.header.get_zooms()[:3]); assert np.isfinite(img.dataobj).all(); print('Actual SynthSR CPU inference completed on nonclinical generated phantom:', img.shape)"
