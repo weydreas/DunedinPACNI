@@ -213,6 +213,13 @@ while ($true) {
     for ($i=0; $i -lt $persons.Count; $i++) {
         Write-Host ("{0}. {1} ({2} MRI)" -f ($i+1), $persons[$i].label, $persons[$i].study_count)
     }
+    if ($state.detected_local) {
+        Write-Host 'Detected in local DICOM (not yet assigned):' -ForegroundColor Yellow
+        foreach ($entry in @($state.detected_local)) {
+            Write-Host ("  {0}: {1}" -f $entry.study, $entry.name)
+        }
+        Write-Host 'Choose D to review and explicitly register these identities.'
+    }
     Write-Host 'N. Create patient (letters, numbers and spaces)'
     if ($state.unassigned_legacy_studies.Count -gt 0) {
         Write-Host ("A. Assign {0} existing legacy MRI folders to a patient" -f $state.unassigned_legacy_studies.Count)
