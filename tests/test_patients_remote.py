@@ -94,6 +94,62 @@ class PatientsAndCloudTests(unittest.TestCase):
         self.assertEqual((folder/"T1.nii.gz").read_bytes(),b"never move")
         self.assertEqual(len(patients.load_registry()["merges"]),1)
 
+    def test_explicit_local_dicom_registration_separates_patient_ids(self):
+        (self.legacy/"2015").mkdir()
+        (self.legacy/"2018").mkdir()
+        report = {"status":"scanned",
+                  "found":{
+                      "2015":{"label":"TEST SG","patient_id_sha256":"hashone"},
+                      "2018":{"label":"TEST S","patient_id_sha256":"hashone"}},
+                  "unknown_studies":[]}
+        with mock.patch.object(patients,"discover_local_patient_names",return_value=report):
+            result=patients.register_discovered()
+        self.assertEqual(len(result["registered"]),2)
+        self.assertEqual(len(patients.list_patients()),2)
+        self.assertNotEqual(patients.legacy_patient("2015"),
+                            patients.legacy_patient("2018"))
+        merged=patients.merge_patients(patients.legacy_patient("2015"),
+                                       patients.legacy_patient("2018"))
+        self.assertEqual(len(patients.list_patients()),1)
+        self.assertEqual(patients.legacy_patient("2018"),merged)
+        self.assertEqual({p.name for _,p in patients.patient_studies(merged)},
+                         {"2015","2018"})
+
+    def test_same_name_different_dicom_id_is_not_auto_merged(self):
+        (self.legacy/"2015").mkdir()
+        (self.legacy/"2018").mkdir()
+        report = {"status":"scanned",
+                  "found":{
+                      "2015":{"label":"TEST SG","patient_id_sha256":"hashone"},
+                      "2018":{"label":"TEST SG","patient_id_sha256":"hashtwo"}},
+                  "unknown_studies":[]}
+        with mock.patch.object(patients,"discover_local_patient_names",return_value=report):
+            result=patients.register_discovered()
+        self.assertEqual(result["registered"],[])
+        self.assertEqual(set(result["conflicted"]),{"2015","2018"})
+        self.assertEqual(len(patients.list_patients()),0)
+
+    def test_patient_namespace_isolation_preserves_original_ids(self):
+        spec=importlib.util.spec_from_file_location("mri_pipeline_for_patients",
+                       ROOT/"scripts"/"mri_pipeline.py")
+        pipeline=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pipeline)
+        root=self.legacy
+        first=root/"2026"
+        first.mkdir()
+        second=root/"2027"
+        second.mkdir()
+        baseline=pipeline.subject_id(first)
+        with mock.patch.dict(os.environ,{"PACNI_PATIENT_ID":"p_"+"a"*32,
+                                         "PACNI_VISIBLE_STUDIES":'["2026"]'}), \
+             mock.patch.object(pipeline,"MRI",root):
+            self.assertEqual([p.name for p in pipeline.studies()],["2026"])
+            user1=pipeline.subject_id(first)
+            self.assertNotEqual(baseline,user1)
+        with mock.patch.dict(os.environ,{"PACNI_PATIENT_ID":"p_"+"b"*32}):
+            self.assertNotEqual(user1,pipeline.subject_id(first))
+        self.assertEqual(baseline,pipeline.subject_id(first))
+
     def test_provider_allowlist_and_expiry(self):
         for bad in ["http://disk.yandex.ru/a","https://example.com/data",
                     "https://user:pw@disk.yandex.ru/d/x",
