@@ -168,9 +168,14 @@ function Show-PatientMenu([object]$SelectedPatient) {
             $sharedLink = Read-Host 'Public read-only HTTPS link'
             if (-not $sharedLink) { continue }
             $expiry = Read-Host 'Last access date YYYY-MM-DD (link owner must also set expiry)'
-            $importArgs = @($Prefix) + @(Join-Path $Root 'scripts\remote_mri.py', 'interactive', $PatientId, $sharedLink, $expiry)
-            & $Python @importArgs
-            if ($LASTEXITCODE -ne 0) { Write-Host 'Cloud import was not completed.' -ForegroundColor Yellow }
+            $env:PACNI_CLOUD_LINK = $sharedLink
+            try {
+                $importArgs = @($Prefix) + @(Join-Path $Root 'scripts\remote_mri.py', 'interactive', $PatientId, $expiry)
+                & $Python @importArgs
+                if ($LASTEXITCODE -ne 0) { Write-Host 'Cloud import was not completed.' -ForegroundColor Yellow }
+            } finally {
+                Remove-Item Env:PACNI_CLOUD_LINK -ErrorAction SilentlyContinue
+            }
             Read-Host 'Press Enter to continue' | Out-Null
             continue
         }
