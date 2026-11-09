@@ -33,6 +33,7 @@ MRI = ROOT / "MRI"
 IMPORTS = ROOT / "work" / "imports"
 UPSCALED = ROOT / "work" / "upscaled"
 SYNTHSR_REF = "04ab5548f4609c2b44ca51b3f4bc319b585dafa7"
+SYNTHSR_MODEL_SHA256 = "a472f776e7b33b5ea6e10c801f55fee488f1477a208b3e6998dc1aec1d9c5f8b"
 SYNTHSR_IMAGE = os.getenv("PACNI_SYNTHSR_IMAGE", "biodata-synthsr:04ab5548")
 WARNING = (
     "WARNING: SYNTHETIC RESEARCH IMAGE. SynthSR predicts missing anatomy "
@@ -134,7 +135,9 @@ def read_index(study, verify_source=True):
         return None
     try:
         index = json.loads(path.read_text(encoding="utf-8"))
-        if index.get("study") != study.name or index.get("model_ref") != SYNTHSR_REF:
+        if (index.get("study") != study.name
+                or index.get("model_ref") != SYNTHSR_REF
+                or index.get("model_sha256") != SYNTHSR_MODEL_SHA256):
             return None
         source = (ROOT / index["source_relative"]).resolve()
         dest = (ROOT / index["output_relative"]).resolve()
@@ -231,6 +234,7 @@ def upscale(study, input_fn=input, run_fn=None):
     record = {
         "schema_version": 1, "study": study.name, "method": "SynthSR",
         "model_ref": SYNTHSR_REF, "model_family": "SynthSR v2 January 2023",
+        "model_sha256": SYNTHSR_MODEL_SHA256,
         "docker_image": SYNTHSR_IMAGE, "synthetic": True,
         "source_relative": p.relative_to(ROOT).as_posix(),
         "source_sha256": source_sha,
