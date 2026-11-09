@@ -2,6 +2,7 @@
 FROM python:3.11-slim-bookworm
 
 ARG SYNTHSR_REF=04ab5548f4609c2b44ca51b3f4bc319b585dafa7
+ARG SYNTHSR_MODEL_SHA256=a472f776e7b33b5ea6e10c801f55fee488f1477a208b3e6998dc1aec1d9c5f8b
 ENV TF_CPP_MIN_LOG_LEVEL=2 CUDA_VISIBLE_DEVICES=-1 PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git unzip \
@@ -15,6 +16,7 @@ RUN git clone --filter=blob:none https://github.com/neurolabusc/py_synthsr.git /
     && curl --fail --location --retry 3 https://osf.io/download/jqdcm/ -o /tmp/models.zip \
     && unzip -jo /tmp/models.zip '*synthsr_v20_230130.h5' -d py_synthsr/models \
     && test -s py_synthsr/models/synthsr_v20_230130.h5 \
+    && echo "${SYNTHSR_MODEL_SHA256}  py_synthsr/models/synthsr_v20_230130.h5" | sha256sum -c - \
     && rm -f /tmp/models.zip \
     && pip install --no-cache-dir 'tensorflow-cpu==2.15.1' nibabel scipy \
     && pip install --no-cache-dir --no-deps /opt/py_synthsr \
