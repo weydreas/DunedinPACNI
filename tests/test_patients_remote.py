@@ -54,6 +54,12 @@ class PatientsAndCloudTests(unittest.TestCase):
             p.stop()
         self.tmp.cleanup()
 
+    def test_patient_data_excluded_from_git_and_docker_context(self):
+        gitignore=(ROOT/".gitignore").read_text(encoding="utf-8")
+        dockerignore=(ROOT/".dockerignore").read_text(encoding="utf-8")
+        self.assertIn("/patients/",gitignore.splitlines())
+        self.assertIn("patients",dockerignore.splitlines())
+
     def test_names_and_no_path_traversal(self):
         for name in ["../foo", "AB/C", "A:BCD", "..", "a\\b", "name!"]:
             with self.subTest(name=name), self.assertRaises(patients.PatientError):
