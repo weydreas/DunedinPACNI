@@ -14,7 +14,19 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 from pathlib import Path
+
+
+def safe_print(*parts, **options):
+    """Display paths safely even in Windows sessions with legacy code pages."""
+    try:
+        print(*parts, **options)
+    except UnicodeEncodeError:
+        enc = sys.stdout.encoding or "ascii"
+        text = " ".join(str(part) for part in parts)
+        fallback = text.encode(enc, errors="backslashreplace").decode(enc)
+        print(fallback, **options)
 
 ROOT = Path(__file__).resolve().parents[1]
 MRI = ROOT / "MRI"
@@ -152,7 +164,7 @@ def eligible_study(study):
 
 def upscale(study, input_fn=input, run_fn=None):
     eligible_study(study)
-    print("\n" + WARNING + "\n", flush=True)
+    safe_print("\n" + WARNING + "\n", flush=True)
     options = candidates(study)
     if not options:
         raise UpscaleError(
@@ -160,24 +172,24 @@ def upscale(study, input_fn=input, run_fn=None):
             "the original DICOM folders (conversion may report no suitable native 3D T1). "
             "Do not try to synthesize a missing field of view."
         )
-    print("Source series for this SAME MRI study:")
+    safe_print("Source series for this SAME MRI study:")
     for i, item in enumerate(options, 1):
-        print(f'{i}. {item["label"]} [{item["kind"] or "NIfTI"}] '
+        safe_print(f'{i}. {item["label"]} [{item["kind"] or "NIfTI"}] '
               f'{item["nifti"]["shape"]} voxels '
               f'{item["nifti"]["voxel_mm"]} mm')
     raw = input_fn("Select a series number (Enter cancels): ").strip()
     if not raw.isdecimal() or not (1 <= int(raw) <= len(options)):
         raise UpscaleError("Upscaling cancelled; no images changed")
     source = options[int(raw) - 1]
-    print("Selected:", source["label"])
-    print("Check whole-brain coverage visually, if possible.")
+    safe_print("Selected:", source["label"])
+    safe_print("Check whole-brain coverage visually, if possible.")
     if input_fn("Type UPSCALE to generate synthetic anatomy: ").strip() != "UPSCALE":
         raise UpscaleError("No operator confirmation; nothing generated")
     p = source["path"]
     source_sha = file_hash(p)
     previous = read_index(study)
     if previous and previous["source_sha256"] == source_sha:
-        print("Already upscaled; reusing:", previous["output_path"])
+        safe_print("Already upscaled; reusing:", previous["output_path"])
         return previous["output_path"]
 
     target_dir = storage(study) / source_sha[:16]
@@ -191,7 +203,7 @@ def upscale(study, input_fn=input, run_fn=None):
     if shutil.which("docker") is None and run_fn is None:
         raise UpscaleError("Docker Desktop/CLI is required for SynthSR")
     runner = run_fn or (lambda args: subprocess.run(args, check=True))
-    print("Building a separate CPU SynthSR Docker image if needed.")
+    safe_print("Building a separate CPU SynthSR Docker image if needed.")
     runner(["docker", "build", "-t", SYNTHSR_IMAGE, "-f",
             str(ROOT / "docker" / "Dockerfile.synthsr"), str(ROOT)])
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -234,7 +246,7 @@ def upscale(study, input_fn=input, run_fn=None):
     stage = store / ".index.tmp"
     stage.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(stage, store / "index.json")
-    print("[UPSCALED] (derived; not a new MRI acquisition):", output)
-    print("Original remains untouched:", p)
-    print(WARNING)
+    safe_print("[UPSCALED] (derived; not a new MRI acquisition):", output)
+    safe_print("Original remains untouched:", p)
+    safe_print(WARNING)
     return output
