@@ -85,7 +85,7 @@ def candidates(study):
     """Only local image files physically under this study or its DICOM conversion."""
     sources = []
     for p in sorted(study.iterdir()):
-        if p.is_file() and not p.is_symlink() and p.name.lower().endswith((".nii", ".nii.gz", ".mgz")):
+        if p.is_file() and not p.is_symlink() and p.name.lower().endswith((".nii", ".nii.gz")):
             sources.append((p, "Original study NIfTI", None))
     manifest_path = converted_dir(study).parent / "series-manifest.json"
     if manifest_path.is_file() and not manifest_path.is_symlink():
