@@ -458,7 +458,11 @@ How to use on Windows:
 4. A separate CPU Docker image is built the first time. It pins the
    `neurolabusc/py_synthsr` source to commit
    `04ab5548f4609c2b44ca51b3f4bc319b585dafa7` and downloads the publicly
-   hosted SynthSR v2 model at build time. This environment does not alter
+   hosted SynthSR v2 model at build time, with its weights strictly pinned
+   to SHA-256 `a472f776e7b33b5ea6e10c801f55fee488f1477a208b3e6998dc1aec1d9c5f8b`.
+   A changed remote model fails the build instead of silently changing MRI
+   derivatives; `index.json` stores both code revision and weight digest.
+   This environment does not alter
    `freesurfer/freesurfer:7.4.1` or require a FreeSurfer license for
    the synthesis step itself. Docker execution disables networking and
    mounts the selected original file read-only.
