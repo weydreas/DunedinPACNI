@@ -1,5 +1,6 @@
 # Patient data, reconstructed brain images, computed results and local license.
 /MRI/
+/patients/
 /work/
 /results/
 /config/
