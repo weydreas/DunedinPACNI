@@ -297,7 +297,9 @@ def parse_dicom(data):
     if len(data) < 132 or data[128:132] != b"DICM":
         raise CloudError("Unsupported DICOM preamble; cannot classify safely")
     wanted = {(0x0008,0x0060): "modality", (0x0008,0x103e): "description",
-              (0x0018,0x1030): "protocol", (0x0020,0x000e): "series_uid",
+              (0x0018,0x1030): "protocol", (0x0018,0x0023): "acquisition_type",
+              (0x0018,0x0050): "slice_thickness_mm",
+              (0x0020,0x000e): "series_uid",
               (0x0010,0x0010): "patient_name", (0x0010,0x0020): "patient_id"}
     cursor = 132
     result = {}
@@ -360,11 +362,20 @@ def discover_series(share, files, fetch=http_request):
         contrast = " ".join([header.get("description",""),header.get("protocol","")])
         if header.get("modality") != "MR" or EXCLUDE.search(contrast) or not T1.search(contrast):
             continue
+        # DICOM headers can label 2D SE T1 correctly: it is not a native
+        # 3D T1 acceptable for DunedinPACNI, though SynthSR can try it.
+        try:
+            thick = float(header.get("slice_thickness_mm", "0"))
+        except ValueError:
+            thick = 0
+        native = (header.get("acquisition_type", "").upper() == "3D"
+                  and 0 < thick <= 1.5 and len(members) >= 64)
+        grade = "NATIVE_3D_T1_CANDIDATE" if native else "SYNTHSR_ONLY_CANDIDATE"
         options.append({"folder": parent, "count": len(members),
                         "size": sum(x["size"] for x in members),
                         "description": header.get("description") or header.get("protocol") or "T1",
-                        "uid": header["series_uid"], "files": members})
-    return options
+                        "grade": grade, "uid": header["series_uid"], "files": members})
+    return sorted(options, key=lambda x:(x["grade"] != "NATIVE_3D_T1_CANDIDATE",x["folder"]))
 
 
 def validate_entire_series(share, selected, fetch=http_request):
@@ -443,7 +454,7 @@ def interactive(patient_id, share, expiry, input_fn=input):
         raise CloudError("No confidently identified T1 series: no full MRI downloaded")
     print("Candidate T1 DICOM series (header metadata, not validated whole-brain coverage):")
     for index,opt in enumerate(options,1):
-        print(f'{index}. {opt["description"]} | {opt["count"]} files | '
+        print(f'{index}. [{opt["grade"]}] {opt["description"]} | {opt["count"]} files | '
               f'{opt["size"]/(1024**2):.1f} MiB')
     pick = input_fn("Choose number (Enter to cancel): ").strip()
     if not pick.isdecimal() or not 1 <= int(pick) <= len(options):
