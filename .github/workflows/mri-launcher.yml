@@ -38,3 +38,15 @@ jobs:
         run: Rscript -e "install.packages('progress', repos='https://cloud.r-project.org')"
       - name: Test published PACNI model without patient data
         run: Rscript tests/test_export_r.R
+
+  synthsr-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build isolated CPU SynthSR image and download the pinned research model
+        run: docker build --progress plain -f docker/Dockerfile.synthsr -t biodata-synthsr:ci .
+      - name: Verify model and command line without patient data
+        run: |
+          docker run --rm --network none biodata-synthsr:ci --help
+          docker run --rm --network none --entrypoint python biodata-synthsr:ci -c "from pathlib import Path; import tensorflow as tf; p=Path('/opt/py_synthsr/py_synthsr/models/synthsr_v20_230130.h5'); assert p.is_file() and p.stat().st_size > 1000000; print('SynthSR model ready; TensorFlow:', tf.__version__)"
