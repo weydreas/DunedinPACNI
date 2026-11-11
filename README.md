@@ -561,7 +561,7 @@ https://yandex.com/dev/disk/rest/
 2. Run offline tests with `py -3 -m unittest discover -s tests -v` (no MRI
    data or cloud credentials are accessed by the tests).
 3. Launch `start.cmd`; the first menu must be **Patients**. Use `D` to
-   inspect local DICOM identity hints, or `N` to create `SKAKUN SG`. Use
+   inspect local DICOM identity hints, or `N` to create `TEST ALPHA`. Use
    `A` to attach existing 2015/2018/2021 studies individually; no originals
    should be moved. The root `MRI/` remains the same.
 4. Create a second synthetic label, merge it into the first using `M`,
