@@ -589,3 +589,10 @@ and secure handling have been established.
 
 Google link-sharing resource-key support follows
 https://developers.google.com/workspace/drive/api/guides/resource-keys .
+
+When a patient contains physically separate MRI roots due to a manual merge,
+menu option **8** compares declared scanner/protocol metadata across **all**
+linked roots, even for scans with the same date/name. It writes a separate
+local `results/patients/p_<UUID>/comparability.json`. This is not visual QC,
+scanner harmonization or proof of score comparability. Physical source IDs
+are preserved so different patient records cannot overwrite each other.
