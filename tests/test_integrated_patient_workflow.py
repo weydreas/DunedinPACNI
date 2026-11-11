@@ -40,6 +40,7 @@ def fake_dicom(uid="1.2.840.10009.1",ident="NONPATIENT"):
         (0x0002,0x0010,"UI","1.2.840.10008.1.2.1"),
         (0x0008,0x0060,"CS","MR"),
         (0x0008,0x103e,"LO","T1 MPRAGE"),
+        (0x0010,0x0010,"PN","TEST PERSON"),
         (0x0010,0x0020,"LO",ident),
         (0x0020,0x000e,"UI",uid),
     ]:
