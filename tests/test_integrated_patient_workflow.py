@@ -184,6 +184,27 @@ class IntegratedPatientWorkflow(unittest.TestCase):
             self.assertFalse((self.root/"work"/"freesurfer"/old_native_id).exists())
             self.assertEqual(len(list((self.root/"work"/"imports"/unique_id/"converted").glob("*.nii.gz"))),1)
 
+    def test_local_patient_header_registration_requires_complete_identity(self):
+        study=self.root/"MRI"/"2018.05 MRI"
+        study.mkdir()
+        (study/"IM0001.dcm").write_bytes(fake_dicom(ident="PATIENT_A"))
+        (study/"IM0002.dcm").write_bytes(fake_dicom(ident="PATIENT_B"))
+        with mock.patch.dict(sys.modules,{"pydicom":None}):
+            result=registry.register_discovered()
+        self.assertEqual(result["registered"],[])
+        self.assertEqual(registry.list_patients(),[])
+        self.assertIn(study.name,result["unknown_studies"])
+
+    def test_unreadable_local_header_blocks_automatic_registration(self):
+        study=self.root/"MRI"/"2018.05 MRI"
+        study.mkdir()
+        (study/"IM0001.dcm").write_bytes(fake_dicom(ident="PATIENT_A"))
+        (study/"IM0002.dcm").write_bytes(b"not a dicom")
+        with mock.patch.dict(sys.modules,{"pydicom":None}):
+            result=registry.register_discovered()
+        self.assertEqual(result["registered"],[])
+        self.assertIn(study.name,result["unknown_studies"])
+
     def test_complete_local_cloud_identity_import_recon_chain(self):
         self.run_test_workflow()
 
