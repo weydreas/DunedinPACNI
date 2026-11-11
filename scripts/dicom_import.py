@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MRI = ROOT / "MRI"
+MRI = Path(os.environ.get("PACNI_MRI_ROOT", str(ROOT / "MRI"))).resolve()
 CACHE = ROOT / "work" / "imports"
 POSITIVE = re.compile(r"t1|mprage|mp.rage|bravo|(?:f)?spgr|mdeft|tfl|3d.?ir", re.I)
 NEGATIVE = re.compile(
@@ -34,8 +34,11 @@ class ImportErrorMRI(RuntimeError):
 
 def study_id(study):
     slug = re.sub(r"[^A-Za-z0-9_]", "_", study.name)[:30] or "scan"
-    return "pacni_" + slug + "_" + hashlib.sha256(
-        study.name.encode("utf-8")).hexdigest()[:10]
+    namespace = os.environ.get("PACNI_PATIENT_ID", "")
+    if namespace and not re.fullmatch(r"p_[0-9a-f]{32}", namespace):
+        raise ValueError("Invalid PACNI_PATIENT_ID")
+    identity = (namespace + ":" if namespace else "") + study.name
+    return "pacni_" + slug + "_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:10]
 
 
 def converter_path():

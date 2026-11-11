@@ -1,0 +1,331 @@
+"""Patient registry and selective-cloud behavioral regression tests; synthetic data only."""
+from __future__ import annotations
+import datetime
+import gzip
+import importlib.util
+import json
+import os
+import struct
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import patient_registry as patients
+import remote_mri as cloud
+
+
+def dicom_bytes(series="1.2.3.44", patient="C0007", contrast="T1 MPRAGE", acquisition="3D", thickness="1.0"):
+    """Build just a valid little-endian explicit VR test header."""
+    data = bytearray(128) + bytearray(b"DICM")
+    def tag(group, element, vr, value):
+        val = value.encode("ascii")
+        if len(val) % 2: val += b" "
+        return struct.pack("<HH",group,element)+vr.encode("ascii")+struct.pack("<H",len(val))+val
+    data += tag(0x0002, 0x0010, "UI", "1.2.840.10008.1.2.1")
+    data += tag(0x0008, 0x0060, "CS", "MR")
+    data += tag(0x0008, 0x103e, "LO", contrast)
+    data += tag(0x0010, 0x0020, "LO", patient)
+    data += tag(0x0018, 0x0023, "CS", acquisition)
+    data += tag(0x0018, 0x0050, "DS", thickness)
+    data += tag(0x0020, 0x000e, "UI", series)
+    return bytes(data).ljust(cloud.MAX_PREVIEW,b"\0")
+
+
+class PatientsAndCloudTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.db_dir = self.root/"patients"
+        self.legacy = self.root/"MRI"
+        self.legacy.mkdir()
+        self.patchers = [
+            mock.patch.object(patients, "ROOT", self.root),
+            mock.patch.object(patients, "DATA", self.db_dir),
+            mock.patch.object(patients, "REGISTRY", self.db_dir/"registry.json"),
+            mock.patch.object(patients, "LEGACY", self.legacy),
+        ]
+        for p in self.patchers:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self.patchers):
+            p.stop()
+        self.tmp.cleanup()
+
+    def test_patient_data_excluded_from_git_and_docker_context(self):
+        gitignore=(ROOT/".gitignore").read_text(encoding="utf-8")
+        dockerignore=(ROOT/".dockerignore").read_text(encoding="utf-8")
+        self.assertIn("/patients/",gitignore.splitlines())
+        self.assertIn("patients",dockerignore.splitlines())
+
+    def test_names_and_no_path_traversal(self):
+        for name in ["../foo", "AB/C", "A:BCD", "..", "a\\b", "name!"]:
+            with self.subTest(name=name), self.assertRaises(patients.PatientError):
+                patients.create_patient(name)
+        pid = patients.create_patient("Test A7")
+        self.assertTrue(patients.root_for(pid).is_dir())
+        self.assertEqual(patients.resolve_patient("test a7"), pid)
+        self.assertEqual(len(patients.list_patients()), 1)
+        with self.assertRaises(patients.PatientError):
+            patients.create_patient("test A7")
+        self.assertFalse((self.root/"outside").exists())
+
+    def test_existing_mri_assign_without_move_and_restart(self):
+        old = self.legacy/"2018-05"
+        old.mkdir()
+        (old/"IM0001.dcm").write_bytes(b"unchanged")
+        pid = patients.create_patient("A CODE")
+        patients.assign_legacy(pid)
+        self.assertEqual([(r.name,s.name) for r,s in patients.patient_studies(pid)],
+                         [("MRI","2018-05")])
+        self.assertEqual((old/"IM0001.dcm").read_bytes(),b"unchanged")
+        self.assertEqual(patients.load_registry()["legacy_assignments"]["2018-05"],pid)
+        with self.assertRaises(patients.PatientError):
+            other=patients.create_patient("B CODE")
+            patients.assign_legacy(other)
+
+    def test_manual_merge_persisted_alias_but_no_raw_mri_move(self):
+        a = patients.create_patient("A CODE")
+        b = patients.create_patient("B CODE")
+        folder = patients.root_for(b)/"2021"
+        folder.mkdir()
+        (folder/"T1.nii.gz").write_bytes(b"never move")
+        patients.merge_patients(a,b)
+        self.assertEqual(patients.resolve_patient("B CODE"),a)
+        self.assertEqual(len(patients.list_patients()),1)
+        self.assertEqual([s.name for _,s in patients.patient_studies(a)],["2021"])
+        self.assertTrue(folder.exists())
+        self.assertEqual((folder/"T1.nii.gz").read_bytes(),b"never move")
+        self.assertEqual(len(patients.load_registry()["merges"]),1)
+
+    def test_explicit_local_dicom_registration_separates_patient_ids(self):
+        (self.legacy/"2015").mkdir()
+        (self.legacy/"2018").mkdir()
+        report = {"status":"scanned",
+                  "found":{
+                      "2015":{"label":"TEST SG","patient_id_sha256":"hashone"},
+                      "2018":{"label":"TEST S","patient_id_sha256":"hashone"}},
+                  "unknown_studies":[]}
+        with mock.patch.object(patients,"discover_local_patient_names",return_value=report):
+            result=patients.register_discovered()
+        self.assertEqual(len(result["registered"]),2)
+        self.assertEqual(len(patients.list_patients()),2)
+        self.assertNotEqual(patients.legacy_patient("2015"),
+                            patients.legacy_patient("2018"))
+        merged=patients.merge_patients(patients.legacy_patient("2015"),
+                                       patients.legacy_patient("2018"))
+        self.assertEqual(len(patients.list_patients()),1)
+        self.assertEqual(patients.legacy_patient("2018"),merged)
+        self.assertEqual({p.name for _,p in patients.patient_studies(merged)},
+                         {"2015","2018"})
+
+    def test_same_name_different_dicom_id_is_not_auto_merged(self):
+        (self.legacy/"2015").mkdir()
+        (self.legacy/"2018").mkdir()
+        report = {"status":"scanned",
+                  "found":{
+                      "2015":{"label":"TEST SG","patient_id_sha256":"hashone"},
+                      "2018":{"label":"TEST SG","patient_id_sha256":"hashtwo"}},
+                  "unknown_studies":[]}
+        with mock.patch.object(patients,"discover_local_patient_names",return_value=report):
+            result=patients.register_discovered()
+        self.assertEqual(result["registered"],[])
+        self.assertEqual(set(result["conflicted"]),{"2015","2018"})
+        self.assertEqual(len(patients.list_patients()),0)
+
+    def test_patient_namespace_isolation_preserves_original_ids(self):
+        spec=importlib.util.spec_from_file_location("mri_pipeline_for_patients",
+                       ROOT/"scripts"/"mri_pipeline.py")
+        pipeline=importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(pipeline)
+        root=self.legacy
+        first=root/"2026"
+        first.mkdir()
+        second=root/"2027"
+        second.mkdir()
+        baseline=pipeline.subject_id(first)
+        with mock.patch.dict(os.environ,{"PACNI_PATIENT_ID":"p_"+"a"*32,
+                                         "PACNI_VISIBLE_STUDIES":'["2026"]'}), \
+             mock.patch.object(pipeline,"MRI",root):
+            self.assertEqual([p.name for p in pipeline.studies()],["2026"])
+            user1=pipeline.subject_id(first)
+            self.assertNotEqual(baseline,user1)
+        with mock.patch.dict(os.environ,{"PACNI_PATIENT_ID":"p_"+"b"*32}):
+            self.assertNotEqual(user1,pipeline.subject_id(first))
+        self.assertEqual(baseline,pipeline.subject_id(first))
+
+    def test_cloud_destination_rejects_reserved_windows_study_names(self):
+        for name in ("CON", "NUL", "COM1", "LPT9", "../outside", "C:/drive"):
+            with self.subTest(name=name), self.assertRaises(cloud.CloudError):
+                cloud.validate_study_name(name)
+
+    def test_google_resource_key_contract(self):
+        share="https://drive.google.com/drive/folders/abc123?resourcekey=0-TESTKEY"
+        self.assertEqual(cloud.drive_resource_key(share),"0-TESTKEY")
+        self.assertEqual(cloud.google_key_header("abc123","0-TESTKEY"),
+                         {"X-Goog-Drive-Resource-Keys":"abc123/0-TESTKEY"})
+        for bad in ("bad key","../../path","key\r\nX-Evil:1"):
+            with self.assertRaises(cloud.CloudError):
+                cloud.google_key_header("fileID",bad)
+        with mock.patch.dict(os.environ,{"PACNI_GOOGLE_API_KEY":"dummy"}):
+            f={"provider":"google","path":"fileAB","resource_key":"0-file"}
+            url, headers, post=cloud.media_request(share,f,True)
+            self.assertEqual(headers["X-Goog-Drive-Resource-Keys"],"fileAB/0-file")
+            self.assertIn("Range",headers)
+            self.assertIsNone(post)
+
+    def test_downloaded_dicom_identity_change_rolls_back_atomically(self):
+        pid=patients.create_patient("CLIENT8")
+        payload=dicom_bytes(series="1.2.3.44",patient="OTHER")
+        file={"name":"IM0001","parent":"/T1","path":"/T1/IM0001",
+              "size":len(payload),"provider":"yandex"}
+        option={"folder":"/T1","uid":"1.2.3.44","files":[file],
+                "size":len(payload),"description":"T1 MPRAGE",
+                "grade":"NATIVE_3D_T1_CANDIDATE","count":1}
+        def fake_download(share, entry, dest, fetch=None):
+            dest.write_bytes(payload)
+            return len(payload)
+        answers=iter(["1","2026.11.12","IMPORT"])
+        with mock.patch.object(cloud,"list_cloud",return_value=[file]), \
+             mock.patch.object(cloud,"discover_series",return_value=[option]), \
+             mock.patch.object(cloud,"validate_entire_series",return_value="EXPECTED"), \
+             mock.patch.object(cloud,"download_file",side_effect=fake_download):
+            with self.assertRaisesRegex(cloud.CloudError,"identity or series changed"):
+                cloud.interactive(pid,"https://disk.yandex.ru/d/public",
+                   datetime.date.today().isoformat(),input_fn=lambda prompt:next(answers))
+        self.assertFalse((patients.root_for(pid)/"2026.11.12").exists())
+        self.assertEqual(list(patients.root_for(pid).iterdir()),[])
+
+    def test_provider_allowlist_and_expiry(self):
+        for bad in ["http://disk.yandex.ru/a","https://example.com/data",
+                    "https://user:pw@disk.yandex.ru/d/x",
+                    "https://disk.yandex.ru.evil.test/d/x",
+                    "file:///etc/passwd"]:
+            with self.subTest(bad=bad), self.assertRaises(cloud.CloudError):
+                cloud.validate_share(bad)
+        self.assertEqual(cloud.validate_share("https://disk.yandex.ru/d/test"),"yandex")
+        self.assertEqual(cloud.validate_share("https://drive.google.com/drive/folders/abc"),"google")
+        self.assertEqual(cloud.validate_share("https://www.dropbox.com/sh/abc"),"dropbox")
+        with self.assertRaises(cloud.CloudError):
+            cloud.validate_expiry("2000-01-01")
+        with self.assertRaises(cloud.CloudError):
+            cloud.validate_expiry("2050-01-01")
+
+    def test_header_parse_and_non_t1_filter(self):
+        h = cloud.parse_dicom(dicom_bytes())
+        self.assertEqual(h["series_uid"],"1.2.3.44")
+        self.assertEqual(h["modality"],"MR")
+        self.assertEqual(h["patient_id"],"C0007")
+        files = [{"name":f"IM{i:04d}","parent":"/SE1","path":f"/SE1/IM{i:04d}",
+                  "size":10000,"provider":"yandex"} for i in range(30)]
+        def fake_fetch(url,headers=None,post=None,max_bytes=None):
+            return (206,{},dicom_bytes())
+        with mock.patch.object(cloud,"media_request",return_value=("https://cloud-api.yandex.net/fake",{},None)):
+            options = cloud.discover_series("https://disk.yandex.ru/d/a",files,fetch=fake_fetch)
+        self.assertEqual(len(options),1)
+        self.assertEqual(options[0]["count"],30)
+        with mock.patch.object(cloud,"media_request",return_value=("https://cloud-api.yandex.net/fake",{},None)):
+            cloud.validate_entire_series("https://disk.yandex.ru/d/a",options[0],fetch=fake_fetch)
+        with mock.patch.object(cloud,"preview_dicom",return_value={"modality":"MR","series_uid":"1.2.3.44","description":"T2 FLAIR"}):
+            self.assertEqual(cloud.discover_series("https://disk.yandex.ru/d/a",files),[])
+
+    def test_mixed_remote_directory_discovers_only_t1_by_uid(self):
+        files=[]
+        for prefix,n in [("T1",70),("T2",45),("SE",27)]:
+            files.extend([
+                {"name":f"{prefix}{i:04d}.dcm","parent":"/all",
+                 "path":f"/all/{prefix}{i:04d}.dcm","size":10000,"provider":"yandex"}
+                for i in range(n)
+            ])
+        def media(share,file,preview=False):
+            return ("https://cloud-api.yandex.net/"+file["name"], {}, None)
+        def peek(url,headers=None,post=None,max_bytes=None):
+            filename=url.rsplit("/",1)[-1]
+            if filename.startswith("T1"):
+                payload=dicom_bytes("1.2.3.1",contrast="3D T1 MPRAGE")
+            elif filename.startswith("T2"):
+                payload=dicom_bytes("1.2.3.2",contrast="Ax T2 FLAIR")
+            else:
+                payload=dicom_bytes("1.2.3.3",contrast="Cor T1 SE",acquisition="2D",
+                                    thickness="6.5")
+            return (206,{},payload)
+        with mock.patch.object(cloud,"media_request",side_effect=media):
+            selected=cloud.discover_series("https://disk.yandex.ru/d/test",files,fetch=peek)
+        self.assertEqual(len(selected),2)
+        self.assertEqual(selected[0]["grade"],"NATIVE_3D_T1_CANDIDATE")
+        self.assertEqual(selected[0]["count"],70)
+        self.assertEqual(selected[1]["grade"],"SYNTHSR_ONLY_CANDIDATE")
+        self.assertEqual(selected[1]["count"],27)
+        self.assertNotIn("Ax T2 FLAIR",[x["description"] for x in selected])
+
+    def test_refuse_mixed_uid_before_full_download(self):
+        files = [{"name":f"IM{i:04d}","parent":"/SE1","path":f"/SE1/IM{i:04d}",
+                  "size":10000,"provider":"yandex"} for i in range(16)]
+        entry = {"uid":"1.2.3.44","files":files,"size":160000}
+        count = {"n":0}
+        def peek(share,file,fetch=None):
+            count["n"]+=1
+            return {"series_uid":"1.2.3.45" if count["n"]==5 else "1.2.3.44",
+                    "modality":"MR","patient_id":"C0007"}
+        with mock.patch.object(cloud,"preview_dicom",side_effect=peek), \
+             mock.patch.object(cloud,"download_file") as download:
+            with self.assertRaises(cloud.CloudError):
+                cloud.validate_entire_series("https://disk.yandex.ru/d/a",entry)
+            download.assert_not_called()
+
+    def test_success_downloads_only_selected_uid_without_link_persistence(self):
+        pid=patients.create_patient("CLIENT9")
+        payload=dicom_bytes(series="1.2.3.44")
+        listed=[
+            {"name":f"IM{i:04d}","parent":"/T1","path":f"/T1/IM{i:04d}",
+             "size":len(payload),"provider":"yandex"} for i in range(16)
+        ]
+        extra={"name":"IMFLAIR","parent":"/FLAIR","path":"/FLAIR/IMFLAIR",
+               "size":len(payload),"provider":"yandex"}
+        option={"folder":"/T1","uid":"1.2.3.44","files":listed,
+                "size":len(payload)*16,"description":"T1 MPRAGE","grade":"SYNTHSR_ONLY_CANDIDATE","count":16}
+        download_calls=[]
+        def download(share,entry,dest,fetch=None):
+            download_calls.append(entry["path"])
+            dest.write_bytes(payload)
+            return len(payload)
+        answers=iter(["1","2026.11.09","IMPORT"])
+        with mock.patch.object(cloud,"list_cloud",return_value=listed+[extra]), \
+             mock.patch.object(cloud,"discover_series",return_value=[option]), \
+             mock.patch.object(cloud,"validate_entire_series",return_value="C0007"), \
+             mock.patch.object(cloud,"download_file",side_effect=download):
+            cloud.interactive(pid,"https://disk.yandex.ru/d/public",
+                datetime.date.today().isoformat(),input_fn=lambda prompt:next(answers))
+        root=patients.root_for(pid)/"2026.11.09"
+        self.assertTrue(root.is_dir())
+        self.assertEqual(len(list(root.glob("*.dcm"))),16)
+        self.assertNotIn("/FLAIR/IMFLAIR",download_calls)
+        manifest=(root/"cloud-import.json").read_text(encoding="utf-8")
+        self.assertNotIn("https://disk.yandex.ru/d/public",manifest)
+        self.assertIn("series_uid_sha256",manifest)
+
+    def test_cloud_interactive_cancel_does_not_create_patient_mri(self):
+        pid=patients.create_patient("CLIENT7")
+        file={"name":"IM0001","parent":"/folder","path":"/folder/IM0001",
+              "size":1000,"provider":"yandex"}
+        option={"folder":"/folder","uid":"1.2.3","files":[file]*20,"size":20000,
+                "description":"T1 MPRAGE","grade":"SYNTHSR_ONLY_CANDIDATE","count":20}
+        with mock.patch.object(cloud,"list_cloud",return_value=[file]), \
+             mock.patch.object(cloud,"discover_series",return_value=[option]), \
+             mock.patch.object(cloud,"validate_entire_series",return_value="C0007"), \
+             mock.patch.object(cloud,"download_file") as download:
+            future=datetime.date.today().isoformat()
+            iter_answers=iter(["1","2025-05-01","CANCEL"])
+            with self.assertRaises(cloud.CloudError):
+                cloud.interactive(pid,"https://disk.yandex.ru/d/test",future,
+                                  input_fn=lambda prompt: next(iter_answers))
+            download.assert_not_called()
+        self.assertEqual(list(patients.root_for(pid).iterdir()),[])
+
+
+if __name__ == "__main__":
+    unittest.main()

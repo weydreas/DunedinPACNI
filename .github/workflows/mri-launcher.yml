@@ -3,6 +3,10 @@ on:
   pull_request:
   push:
     branches: [master]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   portable-python:
     strategy:
@@ -27,17 +31,30 @@ jobs:
             $parseErrors | ForEach-Object { Write-Error $_.Message }
             exit 1
           }
+      - name: Parse launcher with legacy Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path './start.ps1'), [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
   r-model:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - uses: r-lib/actions/setup-r@v2
-        with:
-          r-version: '4.3.2'
-      - name: Install model dependency
-        run: Rscript -e "install.packages('progress', repos='https://cloud.r-project.org')"
-      - name: Test published PACNI model without patient data
-        run: Rscript tests/test_export_r.R
+      - name: Build the same R image used for DunedinPACNI processing
+        run: docker build --progress plain -f docker/Dockerfile.pacni -t dunedinpacni-r:ci .
+      - name: Test published PACNI model in production R image without patient data
+        run: |
+          docker run --rm --network none \
+            --mount "type=bind,source=$GITHUB_WORKSPACE,target=/code,readonly" \
+            --workdir /code --entrypoint Rscript \
+            dunedinpacni-r:ci tests/test_export_r.R
 
   synthsr-container:
     runs-on: ubuntu-latest

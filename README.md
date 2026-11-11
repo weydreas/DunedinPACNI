@@ -483,3 +483,116 @@ CI runs synthetic-only tests. Do not claim a validated PACNI time-series
 from these derived scans. If more complete original 3D T1 images are found
 later, keep them under the existing `MRI/<study>` directory and prefer
 the original analysis over the synthetic version.
+
+## Patients (local identity, non-destructive merges, selective cloud DICOM)
+
+The launcher now starts with a **Patients** screen. No patient name is hardcoded.
+All labels, aliases, merges and imported MRI live locally in Git/Docker-ignored
+`patients/`. Existing historical studies stay at `MRI/` without modification.
+
+- `N` creates a local patient label (letters, digits, spaces), with a stable
+  `patients/p_<UUID>/MRI/` directory. Labels live only in `patients/registry.json`.
+- `D` reads locally available DICOM PatientName/PatientID (optional pydicom,
+  conservative built-in fallback). Explicit `REGISTER` creates and assigns
+  unambiguous identities. Identical names with different PatientIDs are not
+  merged automatically; unknown studies stay unassigned.
+- `A` manually attributes existing legacy MRI studies to a patient, without
+  moving or changing their prior FreeSurfer/PACNI IDs.
+- In a selected patient, `M` persists an operator-confirmed patient merge.
+  Both source roots remain physically unchanged and accessible through one
+  logical patient; old names become aliases. This preserves historical
+  reconstruction paths, cache signatures, and patient provenance.
+- All nested MRI processing actions are limited to the selected patient's
+  visible MRI studies. New patient data have distinct DICOM import, FreeSurfer
+  and SynthSR IDs, even if two patients have the same scan folder name.
+
+### C. Public read-only cloud intake (research / local operator confirmation)
+
+Supported cloud folder listings:
+- **Yandex Disk**: public HTTPS link, no credentials.
+- **Google Drive**: public folder HTTPS link plus `PACNI_GOOGLE_API_KEY`.
+- **Dropbox**: shared folder HTTPS link plus read-only `PACNI_DROPBOX_TOKEN`.
+
+Set only the relevant environment variable in PowerShell before starting
+the app. Never put API keys, public access URLs or patient metadata in Git.
+
+```powershell
+$env:PACNI_GOOGLE_API_KEY = '<restricted Google API key>'
+# Or, for Dropbox:
+$env:PACNI_DROPBOX_TOKEN = '<read-only Dropbox OAuth token>'
+.\start.cmd
+```
+
+Every link must be **read-only, download-enabled and expire at the provider**.
+Operators enter the expiry date (up to 14 days) locally, but this date does
+**not** revoke the remote link: expiry/revocation must be configured in Drive.
+
+Selective workflow: provider metadata listing (paginated/bounded) -> DICOM
+header byte-range previews (max 256 KiB per file) -> T1 candidate list with
+native 3D T1 ranked above experimental 2D T1 / SynthSR-only -> explicit
+series selection -> check every selected file's SeriesInstanceUID/PatientID
+without full download -> `IMPORT` confirmation -> download only that series
+to an atomic local staging directory -> check received DICOM IDs again.
+
+T2, FLAIR, TOF, DWI, localizers, ZIP and non-DICOM content are not treated as
+native T1. Mixed series, uncertain headers, unsupported partial reads,
+unrecognized hosts, oversized listings/files, expired links and network
+errors fail closed, never falling back to a full-folder download.
+
+Cloud links are passed in transient process environment, never stored or
+printed. Patient files and metadata are excluded from both Git and Docker
+build contexts. This application never uploads patient MRI to GitHub or
+ChatGPT. Real cloud link acceptance, anatomical coverage and radiological
+quality require operator validation; no clinical confidence is implied.
+
+Some public cloud links do not permit API folder listing or HTTP Range.
+Google requires an API key to enumerate public folder contents, and Dropbox
+requires a scoped token. Such links are rejected until a compatible connector
+can provide selective reads; arbitrary cloud/ZIP links are not supported.
+
+API references: https://developers.google.com/workspace/drive/api/guides/search-files ;
+https://docs.dropboxapi.com/dropbox-api/api-reference/user-endpoints/files/list-folder ;
+https://yandex.com/dev/disk/rest/
+
+### Windows integration acceptance after this PR merges
+
+1. Update the local `master` (`git fetch origin`, `git switch master`,
+   `git pull --ff-only origin master`); close old launcher windows before restarting.
+2. Run offline tests with `py -3 -m unittest discover -s tests -v` (no MRI
+   data or cloud credentials are accessed by the tests).
+3. Launch `start.cmd`; the first menu must be **Patients**. Use `D` to
+   inspect local DICOM identity hints, or `N` to create `TEST ALPHA`. Use
+   `A` to attach existing 2015/2018/2021 studies individually; no originals
+   should be moved. The root `MRI/` remains the same.
+4. Create a second synthetic label, merge it into the first using `M`,
+   restart the app and confirm the alias is still resolved as one patient.
+   Do not test with a real second person's records when uncertain.
+5. With Docker Desktop **Linux Engine running**, verify
+   `docker info --format '{{.OSType}}|{{.ServerVersion}}'` prints `linux|...`.
+   Pick a previously upscaled 2018 study and run action `12`, then `13`.
+   The synthetic and original PACNI results must not share an output ID.
+6. For remote intake, use a separate public **nonpatient** DICOM test folder
+   for each provider; ensure the provider API exposes folder listing and
+   honors HTTP Range. Verify only the selected T1 series is downloaded.
+   Do NOT post patient medical links, tokens or source images into an issue.
+
+GitHub CI covers Python on Windows/Linux, Windows PowerShell 5.1/7 parsing,
+R-model regression, Docker SynthSR actual nonclinical inference, mocked
+Google Drive/Yandex/Dropbox API contracts, and a full synthetic
+patient -> cloud series -> merge -> DICOM -> FreeSurfer preflight chain.
+**Not yet certified:** real cloud API access/byte-range support,
+clinical-anatomical quality, local Docker Desktop runtime, and scanner
+comparability. A declared expiry date in the app does not make a shared URL
+expire: the sender must configure provider-supported expiry or revoke it
+manually. Real patient data must only be shared after appropriate consent
+and secure handling have been established.
+
+Google link-sharing resource-key support follows
+https://developers.google.com/workspace/drive/api/guides/resource-keys .
+
+When a patient contains physically separate MRI roots due to a manual merge,
+menu option **8** compares declared scanner/protocol metadata across **all**
+linked roots, even for scans with the same date/name. It writes a separate
+local `results/patients/p_<UUID>/comparability.json`. This is not visual QC,
+scanner harmonization or proof of score comparability. Physical source IDs
+are preserved so different patient records cannot overwrite each other.
