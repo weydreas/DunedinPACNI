@@ -596,3 +596,31 @@ linked roots, even for scans with the same date/name. It writes a separate
 local `results/patients/p_<UUID>/comparability.json`. This is not visual QC,
 scanner harmonization or proof of score comparability. Physical source IDs
 are preserved so different patient records cannot overwrite each other.
+
+### Resume interrupted FreeSurfer reconstruction (original and SynthSR, menu 3/12)
+
+If Windows, Docker Desktop or the PowerShell session stops during FreeSurfer
+`recon-all`, the partially reconstructed subject **must not be deleted**.
+The synthetic T1 from menu 11 remains valid. When Docker Desktop's Linux
+Engine is running, select the same MRI and repeat menu **12** for SynthSR or
+menu **3** for a native verified T1.
+
+The launcher validates original/SynthSR input provenance and FreeSurfer image,
+holds a crash-released OS-level per-subject lock, inspects running Docker
+containers, and recognizes only `scripts/IsRunning.lh`, `.rh`, `.lh+rh`.
+Markers are cleared only if sufficiently old, securely readable and owned
+by this same subject, with no active FreeSurfer container. It preserves
+`mri/orig/001.mgz`, FreeSurfer logs, recon intermediates, source images,
+derived SynthSR outputs, prior PACNI results and other patients' folders.
+The rest of the reconstruction uses `recon-all -make all` without `-i`.
+
+Fresh, malformed, symlinked, foreign or actively owned locks, unavailable
+Docker inspection and concurrent launcher attempts all stop safely.
+Do NOT use `-no-isrunning`, clear files manually, delete FreeSurfer subject
+directories, or regenerate SynthSR just to bypass a stale lock. Do not
+run another FreeSurfer instance against the same SUBJECTS_DIR in parallel.
+If the subject cannot be safely resumed, inspect `scripts/recon-all.log`.
+Neither synthesized nor recon-all outputs replace original diagnostic MRI.
+
+Official FreeSurfer interrupted-reconstruction guidance:
+https://freesurfer.net/fswiki/UserContributions/FAQ
