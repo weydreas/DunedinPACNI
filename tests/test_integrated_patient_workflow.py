@@ -165,9 +165,10 @@ class IntegratedPatientWorkflow(unittest.TestCase):
                 (out/"synthetic_mprage.json").write_text(
                     json.dumps({"SeriesDescription":"3D T1 MPRAGE",
                         "MRAcquisitionType":"3D"}),encoding="utf-8")
+            answers=iter(["1","YES"])
             with contextlib.redirect_stdout(io.StringIO()):
                 out=dicom.convert(imported,run_fn=fake_converter,
-                          input_fn=iter(["1","YES"]).__next__)
+                          input_fn=lambda prompt: next(answers))
             self.assertEqual(out,imported/"T1.nii.gz")
             self.assertTrue((imported/"pacni-import.json").exists())
             self.assertEqual(pipeline.active_input(imported),out)
