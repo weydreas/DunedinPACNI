@@ -553,3 +553,39 @@ can provide selective reads; arbitrary cloud/ZIP links are not supported.
 API references: https://developers.google.com/workspace/drive/api/guides/search-files ;
 https://docs.dropboxapi.com/dropbox-api/api-reference/user-endpoints/files/list-folder ;
 https://yandex.com/dev/disk/rest/
+
+### Windows integration acceptance after this PR merges
+
+1. Update the local `master` (`git fetch origin`, `git switch master`,
+   `git pull --ff-only origin master`); close old launcher windows before restarting.
+2. Run offline tests with `py -3 -m unittest discover -s tests -v` (no MRI
+   data or cloud credentials are accessed by the tests).
+3. Launch `start.cmd`; the first menu must be **Patients**. Use `D` to
+   inspect local DICOM identity hints, or `N` to create `SKAKUN SG`. Use
+   `A` to attach existing 2015/2018/2021 studies individually; no originals
+   should be moved. The root `MRI/` remains the same.
+4. Create a second synthetic label, merge it into the first using `M`,
+   restart the app and confirm the alias is still resolved as one patient.
+   Do not test with a real second person's records when uncertain.
+5. With Docker Desktop **Linux Engine running**, verify
+   `docker info --format '{{.OSType}}|{{.ServerVersion}}'` prints `linux|...`.
+   Pick a previously upscaled 2018 study and run action `12`, then `13`.
+   The synthetic and original PACNI results must not share an output ID.
+6. For remote intake, use a separate public **nonpatient** DICOM test folder
+   for each provider; ensure the provider API exposes folder listing and
+   honors HTTP Range. Verify only the selected T1 series is downloaded.
+   Do NOT post patient medical links, tokens or source images into an issue.
+
+GitHub CI covers Python on Windows/Linux, Windows PowerShell 5.1/7 parsing,
+R-model regression, Docker SynthSR actual nonclinical inference, mocked
+Google Drive/Yandex/Dropbox API contracts, and a full synthetic
+patient -> cloud series -> merge -> DICOM -> FreeSurfer preflight chain.
+**Not yet certified:** real cloud API access/byte-range support,
+clinical-anatomical quality, local Docker Desktop runtime, and scanner
+comparability. A declared expiry date in the app does not make a shared URL
+expire: the sender must configure provider-supported expiry or revoke it
+manually. Real patient data must only be shared after appropriate consent
+and secure handling have been established.
+
+Google link-sharing resource-key support follows
+https://developers.google.com/workspace/drive/api/guides/resource-keys .
