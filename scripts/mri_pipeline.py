@@ -133,9 +133,55 @@ def sh(args):
 
 
 def check_docker():
+    """Check that a usable Linux engine is running, not just docker.exe.
+
+    Shared by native FreeSurfer, synthetic FreeSurfer and R processing.
+    Never mutate Docker contexts, start services or touch patient images.
+    """
     if not shutil.which("docker"):
-        raise PipelineError("Docker Desktop/CLI unavailable")
-    sh(["docker", "info", "--format", "{{.ServerVersion}}"])
+        raise PipelineError(
+            "Docker CLI was not found. Install/start Docker Desktop and "
+            "ensure docker.exe is available in PATH."
+        )
+    command = ["docker", "info", "--format", "{{.OSType}}|{{.ServerVersion}}"]
+    try:
+        result = subprocess.run(
+            command, capture_output=True, text=True, errors="replace",
+            check=False, timeout=25,
+        )
+    except subprocess.TimeoutExpired:
+        raise PipelineError(
+            "Docker Engine did not respond within 25 seconds. Check that "
+            "Docker Desktop has finished starting; then retry 'docker info'."
+        ) from None
+    except OSError:
+        raise PipelineError(
+            "Unable to run docker.exe. Check the Docker Desktop installation."
+        ) from None
+    if result.returncode != 0:
+        raise PipelineError(
+            "Docker CLI is installed, but Docker Engine is unreachable. "
+            "On Windows, open Docker Desktop and wait until it reports "
+            "Engine running. Select Linux containers (WSL 2 or Hyper-V). "
+            "Then check: docker info --format '{{.OSType}}|{{.ServerVersion}}'. "
+            "If still failing, inspect 'docker context ls' and 'wsl -l -v'. "
+            "Original MRI and SynthSR outputs have NOT been modified."
+        )
+    lines = result.stdout.strip().splitlines()
+    info = lines[-1].split("|", 1) if lines else []
+    if len(info) != 2 or not all(info):
+        raise PipelineError(
+            "Docker Engine responded without a valid OS/version. "
+            "Check 'docker info' and Docker Desktop."
+        )
+    os_type, version = (x.strip().lower() for x in info)
+    if os_type != "linux":
+        raise PipelineError(
+            "Docker Engine is running Windows containers, but this pipeline "
+            "requires Linux containers. In Docker Desktop choose "
+            "'Switch to Linux containers', then retry."
+        )
+    print("Docker Linux Engine ready:", version)
 
 
 def check_license():
