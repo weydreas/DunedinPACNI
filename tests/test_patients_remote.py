@@ -163,6 +163,43 @@ class PatientsAndCloudTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(cloud.CloudError):
                 cloud.validate_study_name(name)
 
+    def test_google_resource_key_contract(self):
+        share="https://drive.google.com/drive/folders/abc123?resourcekey=0-TESTKEY"
+        self.assertEqual(cloud.drive_resource_key(share),"0-TESTKEY")
+        self.assertEqual(cloud.google_key_header("abc123","0-TESTKEY"),
+                         {"X-Goog-Drive-Resource-Keys":"abc123/0-TESTKEY"})
+        for bad in ("bad key","../../path","key\r\nX-Evil:1"):
+            with self.assertRaises(cloud.CloudError):
+                cloud.google_key_header("fileID",bad)
+        with mock.patch.dict(os.environ,{"PACNI_GOOGLE_API_KEY":"dummy"}):
+            f={"provider":"google","path":"fileAB","resource_key":"0-file"}
+            url, headers, post=cloud.media_request(share,f,True)
+            self.assertEqual(headers["X-Goog-Drive-Resource-Keys"],"fileAB/0-file")
+            self.assertIn("Range",headers)
+            self.assertIsNone(post)
+
+    def test_downloaded_dicom_identity_change_rolls_back_atomically(self):
+        pid=patients.create_patient("CLIENT8")
+        payload=dicom_bytes(series="1.2.3.44",patient="OTHER")
+        file={"name":"IM0001","parent":"/T1","path":"/T1/IM0001",
+              "size":len(payload),"provider":"yandex"}
+        option={"folder":"/T1","uid":"1.2.3.44","files":[file],
+                "size":len(payload),"description":"T1 MPRAGE",
+                "grade":"NATIVE_3D_T1_CANDIDATE","count":1}
+        def fake_download(share, entry, dest, fetch=None):
+            dest.write_bytes(payload)
+            return len(payload)
+        answers=iter(["1","2026.11.12","IMPORT"])
+        with mock.patch.object(cloud,"list_cloud",return_value=[file]), \
+             mock.patch.object(cloud,"discover_series",return_value=[option]), \
+             mock.patch.object(cloud,"validate_entire_series",return_value="EXPECTED"), \
+             mock.patch.object(cloud,"download_file",side_effect=fake_download):
+            with self.assertRaisesRegex(cloud.CloudError,"identity or series changed"):
+                cloud.interactive(pid,"https://disk.yandex.ru/d/public",
+                   datetime.date.today().isoformat(),input_fn=lambda prompt:next(answers))
+        self.assertFalse((patients.root_for(pid)/"2026.11.12").exists())
+        self.assertEqual(list(patients.root_for(pid).iterdir()),[])
+
     def test_provider_allowlist_and_expiry(self):
         for bad in ["http://disk.yandex.ru/a","https://example.com/data",
                     "https://user:pw@disk.yandex.ru/d/x",
@@ -259,7 +296,7 @@ class PatientsAndCloudTests(unittest.TestCase):
         answers=iter(["1","2026.11.09","IMPORT"])
         with mock.patch.object(cloud,"list_cloud",return_value=listed+[extra]), \
              mock.patch.object(cloud,"discover_series",return_value=[option]), \
-             mock.patch.object(cloud,"validate_entire_series",return_value=True), \
+             mock.patch.object(cloud,"validate_entire_series",return_value="C0007"), \
              mock.patch.object(cloud,"download_file",side_effect=download):
             cloud.interactive(pid,"https://disk.yandex.ru/d/public",
                 datetime.date.today().isoformat(),input_fn=lambda prompt:next(answers))
@@ -279,7 +316,7 @@ class PatientsAndCloudTests(unittest.TestCase):
                 "description":"T1 MPRAGE","grade":"SYNTHSR_ONLY_CANDIDATE","count":20}
         with mock.patch.object(cloud,"list_cloud",return_value=[file]), \
              mock.patch.object(cloud,"discover_series",return_value=[option]), \
-             mock.patch.object(cloud,"validate_entire_series",return_value=True), \
+             mock.patch.object(cloud,"validate_entire_series",return_value="C0007"), \
              mock.patch.object(cloud,"download_file") as download:
             future=datetime.date.today().isoformat()
             iter_answers=iter(["1","2025-05-01","CANCEL"])
