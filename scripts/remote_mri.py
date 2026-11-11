@@ -167,40 +167,71 @@ def google_folder_id(share):
     raise CloudError("Google Drive requires a public folder link, not a file/ZIP preview")
 
 
+def drive_resource_key(share):
+    params = urllib.parse.parse_qs(urllib.parse.urlsplit(share).query)
+    key = (params.get("resourcekey") or params.get("resourceKey") or [""])[0]
+    if key and not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", key):
+        raise CloudError("Invalid Google Drive resource key")
+    return key
+
+
+def google_key_header(file_id, key):
+    if not key:
+        return {}
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", file_id):
+        raise CloudError("Invalid Google Drive resource ID")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", key):
+        raise CloudError("Invalid Google Drive resource key")
+    return {"X-Goog-Drive-Resource-Keys": file_id + "/" + key}
+
+
 def listing_google(share):
     api_key = os.getenv("PACNI_GOOGLE_API_KEY", "")
     if not api_key:
         raise CloudError("Google public folder listing requires PACNI_GOOGLE_API_KEY")
     files = []
-    folders = [google_folder_id(share)]
+    folders = [(google_folder_id(share), drive_resource_key(share))]
     while folders:
-        folder = folders.pop(0)
+        folder, folder_key = folders.pop(0)
         token = ""
         while True:
             query = {"q": f"'{folder}' in parents and trashed = false",
-                     "fields": "nextPageToken,incompleteSearch,files(id,name,mimeType,size)",
-                     "pageSize": 1000, "key": api_key}
+                     "fields": "nextPageToken,incompleteSearch,files(id,name,mimeType,size,resourceKey)",
+                     "pageSize": 1000, "key": api_key,
+                     "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
             if token:
                 query["pageToken"] = token
-            obj = as_json(url_q("https://www.googleapis.com/drive/v3/files", **query))
+            obj = as_json(url_q("https://www.googleapis.com/drive/v3/files", **query),
+                          google_key_header(folder, folder_key))
             if obj.get("incompleteSearch"):
                 raise CloudError("Provider reported an incomplete folder search")
-            for row in obj.get("files", []):
+            rows = obj.get("files", [])
+            if not isinstance(rows, list):
+                raise CloudError("Invalid Google Drive folder listing")
+            for row in rows:
                 name = row.get("name", "")
-                if not isinstance(name, str) or not name or "/" in name or "\\" in name:
-                    raise CloudError("Invalid remote filename")
+                fid = row.get("id", "")
+                if (not isinstance(name, str) or not name
+                        or "/" in name or "\\" in name
+                        or name in {".", ".."}
+                        or not isinstance(fid, str)
+                        or not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", fid)):
+                    raise CloudError("Invalid remote filename or file ID")
+                key = row.get("resourceKey") or ""
+                if key and not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", key):
+                    raise CloudError("Invalid Google resourceKey in metadata")
                 if row.get("mimeType") == "application/vnd.google-apps.folder":
-                    folders.append(row["id"])
+                    folders.append((fid, key))
                 elif row.get("mimeType") != "application/vnd.google-apps.shortcut":
-                    files.append({"name": name, "path": str(row["id"]), "parent": folder,
-                                  "size": int(row.get("size") or 0), "provider": "google"})
+                    files.append({"name": name, "path": fid, "parent": folder,
+                                  "size": int(row.get("size") or 0),
+                                  "resource_key": key, "provider": "google"})
                 if len(files) + len(folders) > MAX_LISTED:
                     raise CloudError("Cloud folder listing exceeds safe bounds")
             token = obj.get("nextPageToken", "")
             if not token:
                 break
     return files
-
 
 def dropbox_rpc(route, payload, token):
     headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
@@ -268,6 +299,7 @@ def media_request(share, file, preview=False):
             raise CloudError("Missing Google API key")
         url = url_q("https://www.googleapis.com/drive/v3/files/" +
                     urllib.parse.quote(file["path"], safe=""), alt="media", key=key)
+        headers.update(google_key_header(file["path"], file.get("resource_key", "")))
     else:
         token = os.getenv("PACNI_DROPBOX_TOKEN", "")
         if not token:
