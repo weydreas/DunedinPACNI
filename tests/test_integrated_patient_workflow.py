@@ -106,8 +106,8 @@ class IntegratedPatientWorkflow(unittest.TestCase):
         olddata=legacy/"T1.nii.gz"
         olddata.write_bytes(nifti())
         old_native_id=pipeline.subject_id(legacy)
-        main=self.cli("create","SKAKUN SG")
-        other=self.cli("create","SKAKUN S")
+        main=self.cli("create","TEST ALPHA")
+        other=self.cli("create","TEST BETA")
         self.cli("attach-legacy",main,legacy.name)
         self.assertIn(legacy.name,self.cli("studies",main))
         self.assertEqual(pipeline.subject_id(legacy),old_native_id)
@@ -136,7 +136,7 @@ class IntegratedPatientWorkflow(unittest.TestCase):
 
         self.cli("merge",main,other)
         persisted=registry.load_registry()
-        self.assertEqual(registry.resolve_patient("SKAKUN S",persisted),main)
+        self.assertEqual(registry.resolve_patient("TEST BETA",persisted),main)
         self.assertEqual(len(persisted["patients"]),1)
         self.assertEqual(len(registry.patient_studies(main)),2)
         self.assertTrue(olddata.exists())
