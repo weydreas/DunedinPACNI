@@ -206,6 +206,30 @@ class IntegratedPatientWorkflow(unittest.TestCase):
         self.assertEqual(result["registered"],[])
         self.assertIn(study.name,result["unknown_studies"])
 
+    def test_merged_patient_comparability_across_roots(self):
+        p1=self.cli("create","TEST ALPHA")
+        p2=self.cli("create","TEST BETA")
+        first=registry.root_for(p1)/"2021"
+        second=registry.root_for(p2)/"2021"
+        first.mkdir()
+        second.mkdir()
+        data={"scanner_model":"ScannerA","field_strength_t":3,
+              "sequence":"MPRAGE","voxel_size_mm":[1,1,1]}
+        first_meta=dict(data)
+        second_meta=dict(data,scanner_model="ScannerB")
+        (first/"scan.json").write_text(json.dumps(first_meta),encoding="utf-8")
+        (second/"scan.json").write_text(json.dumps(second_meta),encoding="utf-8")
+        self.cli("merge",p1,p2)
+        scans=json.loads(self.cli("studies",p1))
+        self.assertEqual(len(scans),2)
+        self.assertNotEqual(scans[0]["storage_patient_id"],scans[1]["storage_patient_id"])
+        self.assertTrue(all(x["name"]=="2021" for x in scans))
+        result=json.loads(self.cli("compare",p1))
+        self.assertEqual(len(result["studies"]),2)
+        self.assertEqual(result["status"],"review_required")
+        self.assertTrue(any(d["field"]=="scanner_model" for d in result["differences"]))
+        self.assertTrue((self.root/"results"/"patients"/p1/"comparability.json").exists())
+
     def test_complete_local_cloud_identity_import_recon_chain(self):
         self.run_test_workflow()
 
