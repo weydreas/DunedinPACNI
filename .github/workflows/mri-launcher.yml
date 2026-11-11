@@ -42,6 +42,14 @@ jobs:
             $parseErrors | ForEach-Object { Write-Error $_.Message }
             exit 1
           }
+      - name: Exercise real 3-level MRI navigation (PowerShell 7)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./tests/test_menu_navigation.ps1
+      - name: Exercise real 3-level MRI navigation (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./tests/test_menu_navigation.ps1
   r-model:
     runs-on: ubuntu-latest
     timeout-minutes: 25

@@ -55,10 +55,29 @@ function Get-PatientState {
 }
 
 function Get-PatientScans([string]$PatientId) {
-    $argsToPass = @($Prefix) + @($PatientBackend, 'studies', $PatientId)
+    # Never return an unwrapped JSON array: PowerShell can treat a bare array
+    # differently for 0, 1 and N records depending on pipeline enumeration.
+    # The Python studies-menu contract always returns an object with count.
+    $argsToPass = @($Prefix) + @($PatientBackend, 'studies-menu', $PatientId)
     $json = (& $Python @argsToPass) -join ''
     if ($LASTEXITCODE -ne 0) { throw 'Patient MRI list cannot be read' }
-    return ConvertFrom-Json -InputObject $json
+    $payload = ConvertFrom-Json -InputObject $json
+    if ($null -eq $payload -or $null -eq $payload.count -or
+        [string]$payload.patient_id -ne $PatientId) {
+        throw 'Patient MRI list has an invalid response'
+    }
+    $items = @()
+    foreach ($scan in $payload.studies) {
+        if ($null -eq $scan -or -not $scan.name -or -not $scan.root -or
+            [string]$scan.patient_id -ne $PatientId) {
+            throw 'Patient MRI list includes a malformed study'
+        }
+        $items += $scan
+    }
+    if ($items.Count -ne [int]$payload.count) {
+        throw 'Patient MRI list count differs from the registry'
+    }
+    foreach ($scan in $items) { Write-Output $scan }
 }
 
 function Invoke-PatientAction([string]$Action, [string]$First, [string]$Second) {
@@ -96,7 +115,7 @@ function Show-StudyMenu([object]$SelectedScan) {
         $Study = [string]$SelectedScan.name
         while ($true) {
             Clear-Host
-            Write-Host "Selected MRI: $Study" -ForegroundColor Cyan
+            Write-Host "MRI pipeline: $Study" -ForegroundColor Cyan
             $statusArgs = @($Prefix) + @($Backend, 'list')
             & $Python @statusArgs
             Write-Host ''
@@ -113,7 +132,7 @@ function Show-StudyMenu([object]$SelectedScan) {
             Write-Host '11. Upscale your MRI (SynthSR: SYNTHETIC, not diagnostic)'
             Write-Host '12. Process upscaled MRI (research-only PACNI, no GWR)'
             Write-Host '13. Show upscaled MRI report (research-only)'
-            Write-Host '0. Back to patient'
+            Write-Host '0. Back to patient MRI list'
             $action = Read-Host 'Choose action'
             if ($action -eq '0') { break }
             switch ($action) {
@@ -147,7 +166,18 @@ function Show-PatientMenu([object]$SelectedPatient) {
     while ($true) {
         Clear-Host
         Write-Host "Patient: $($SelectedPatient.label)" -ForegroundColor Cyan
-        $scans = @(Get-PatientScans $PatientId)
+        Write-Host 'Level 2 of 3: MRI studies belonging to this patient' -ForegroundColor Cyan
+        try {
+            $scans = @(Get-PatientScans $PatientId)
+        } catch {
+            Write-Host "ERROR reading MRI studies: $_" -ForegroundColor Red
+            Read-Host 'Press Enter to return to Patients' | Out-Null
+            break
+        }
+        Write-Host ("Attached MRI studies: {0}" -f $scans.Count)
+        if ($scans.Count -eq 0) {
+            Write-Host 'No MRI studies assigned yet. Attach an existing MRI below.' -ForegroundColor Yellow
+        }
         for ($i = 0; $i -lt $scans.Count; $i++) {
             $storage = [string]$scans[$i].storage_patient_id
             $origin = if ($scans[$i].legacy) {
@@ -159,11 +189,35 @@ function Show-PatientMenu([object]$SelectedPatient) {
             }
             Write-Host ("{0}. {1}{2}" -f ($i + 1), $scans[$i].name, $origin)
         }
+        Write-Host ''
+        Write-Host 'Choose an MRI number above to open ALL processing actions (1-13).' -ForegroundColor Green
         Write-Host 'M. Merge with another patient (persistent aliases, no file deletion)'
+        $state = Get-PatientState
+        $unassigned = @($state.unassigned_legacy_studies)
+        if ($unassigned.Count -gt 0) {
+            Write-Host 'A. Attach existing unassigned MRI to this patient'
+        }
         Write-Host 'C. Import a selected DICOM series from a public cloud link'
         Write-Host '0. Back to Patients'
-        $pick = Read-Host 'Choose'
+        $pick = Read-Host 'Choose MRI number or action'
         if ($pick -eq '0') { break }
+        if ($pick -eq 'A' -and $unassigned.Count -gt 0) {
+            Write-Host 'Unassigned original MRI studies:' -ForegroundColor Cyan
+            for ($j = 0; $j -lt $unassigned.Count; $j++) {
+                Write-Host ("{0}. {1}" -f ($j + 1), $unassigned[$j])
+            }
+            $choice = Read-Host 'Choose MRI number to attach (Enter cancels)'
+            $index = 0
+            if ([int]::TryParse($choice, [ref]$index) -and
+                $index -ge 1 -and $index -le $unassigned.Count) {
+                $selectedName = [string]$unassigned[$index - 1]
+                Write-Host ("Attach original MRI '{0}' to patient '{1}'?" -f $selectedName, $SelectedPatient.label)
+                if ((Read-Host 'Type ASSIGN to confirm') -eq 'ASSIGN') {
+                    Invoke-PatientAction 'attach-legacy' $PatientId $selectedName
+                }
+            }
+            continue
+        }
         if ($pick -eq 'M') {
             $state = Get-PatientState
             $others = @($state.patients | Where-Object { $_.id -ne $PatientId })
@@ -199,7 +253,11 @@ function Show-PatientMenu([object]$SelectedPatient) {
         }
         $index = 0
         if ([int]::TryParse($pick, [ref]$index) -and $index -gt 0 -and $index -le $scans.Count) {
+            # This is the third menu level: the existing full MRI pipeline.
             Show-StudyMenu $scans[$index - 1]
+        } elseif ($pick -notin @('0', 'M', 'A', 'C')) {
+            Write-Host 'Select an MRI number from the list above.' -ForegroundColor Yellow
+            Read-Host 'Press Enter to continue' | Out-Null
         }
     }
 }
