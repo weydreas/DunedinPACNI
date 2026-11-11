@@ -229,7 +229,7 @@ def patient_studies(patient_id):
     return result
 
 
-def discover_local_patient_names(limit_per_study=3):
+def discover_local_patient_names(limit_per_study=3, require_exhaustive=False):
     """Read a few *original local DICOM* headers; never infer identities from paths.
 
     pydicom is preferred for PatientName encodings; a conservative built-in
@@ -245,11 +245,14 @@ def discover_local_patient_names(limit_per_study=3):
     for study in legacy_studies():
         observed = set()
         count = 0
+        capped = False
         for item in study.rglob("*"):
-            if count >= limit_per_study:
-                break
             if not item.is_file() or item.is_symlink() or item.suffix.lower() in {".json",".nii",".gz",".mgz",".txt",".csv"}:
                 continue
+            if count >= limit_per_study:
+                capped = True
+                break
+            count += 1
             try:
                 if pydicom is not None:
                     header = pydicom.dcmread(str(item), stop_before_pixels=True,
@@ -266,10 +269,12 @@ def discover_local_patient_names(limit_per_study=3):
                 name = validate_name(name)
                 if uid and len(uid) <= 64:
                     observed.add((name, uid))
-                    count += 1
             except Exception:
                 continue
-        if len(observed) == 1:
+        # A first-screen three-header sample is only a hint. Automatic
+        # registration must complete a bounded full-header inventory,
+        # otherwise mixed-patient studies could be misattributed.
+        if len(observed) == 1 and not (require_exhaustive and capped):
             label, uid = next(iter(observed))
             found[study.name] = {"label": label,
                                  "patient_id_sha256": hashlib.sha256(uid.encode("utf-8")).hexdigest()}
@@ -284,7 +289,7 @@ def register_discovered():
     Exact name + PatientID is the identity key, not surname/initials alone.
     Distinct IDs with same name are skipped for manual resolution, never merged.
     """
-    scan = discover_local_patient_names()
+    scan = discover_local_patient_names(limit_per_study=5000, require_exhaustive=True)
     obj = load_registry()
     buckets = {}
     for study, value in scan["found"].items():
