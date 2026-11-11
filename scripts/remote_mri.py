@@ -440,11 +440,12 @@ def validate_entire_series(share, selected, fetch=http_request):
         if h.get("modality") != "MR" or h["series_uid"] != expected_uid:
             raise CloudError("Mixed DICOM SeriesInstanceUID detected; no images downloaded")
         identity = (h.get("patient_id") or "").strip()
-        if same_patient and identity and identity != same_patient:
+        if not identity:
+            raise CloudError("PatientID missing from DICOM header; identity cannot be verified")
+        if same_patient and identity != same_patient:
             raise CloudError("Mixed DICOM PatientID; refused before full download")
-        if identity:
-            same_patient = identity
-    return True
+        same_patient = identity
+    return same_patient
 
 
 def download_file(share, file, dest, fetch=http_request):
@@ -518,7 +519,7 @@ def interactive(patient_id, share, expiry, input_fn=input):
     if selected["size"] > MAX_SERIES_BYTES:
         raise CloudError("Selected DICOM series exceeds 4 GiB")
     print("Checking SeriesInstanceUID and PatientID of every selected DICOM header...")
-    validate_entire_series(share, selected)
+    verified_patient_id = validate_entire_series(share, selected)
     new_name = validate_study_name(input_fn("Local MRI study folder name (date included): "))
     dest_root = patients.root_for(patient_id)
     if (patients.DATA.is_symlink() or dest_root.parent.is_symlink()
@@ -545,8 +546,11 @@ def interactive(patient_id, share, expiry, input_fn=input):
             # received full file still belongs to the selected series.
             with downloaded.open("rb") as stream:
                 measured = parse_dicom(stream.read(MAX_PREVIEW))
-            if measured.get("series_uid") != selected["uid"] or measured.get("modality") != "MR":
-                raise CloudError("Downloaded DICOM does not match selected series; import rolled back")
+            if (measured.get("series_uid") != selected["uid"]
+                    or measured.get("modality") != "MR"
+                    or not measured.get("patient_id")
+                    or measured.get("patient_id") != verified_patient_id):
+                raise CloudError("Downloaded DICOM identity or series changed; import rolled back")
         # No shared links or personal DICOM identifiers in Git or public logs.
         (staging / "cloud-import.json").write_text(
             json.dumps({"provider":provider, "count":len(selected["files"]),
