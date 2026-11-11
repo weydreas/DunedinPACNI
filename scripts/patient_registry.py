@@ -246,6 +246,7 @@ def discover_local_patient_names(limit_per_study=3, require_exhaustive=False):
         observed = set()
         count = 0
         capped = False
+        unreadable = False
         for item in study.rglob("*"):
             if not item.is_file() or item.is_symlink() or item.suffix.lower() in {".json",".nii",".gz",".mgz",".txt",".csv"}:
                 continue
@@ -270,11 +271,13 @@ def discover_local_patient_names(limit_per_study=3, require_exhaustive=False):
                 if uid and len(uid) <= 64:
                     observed.add((name, uid))
             except Exception:
+                if require_exhaustive:
+                    unreadable = True
                 continue
         # A first-screen three-header sample is only a hint. Automatic
         # registration must complete a bounded full-header inventory,
         # otherwise mixed-patient studies could be misattributed.
-        if len(observed) == 1 and not (require_exhaustive and capped):
+        if len(observed) == 1 and not (require_exhaustive and (capped or unreadable)):
             label, uid = next(iter(observed))
             found[study.name] = {"label": label,
                                  "patient_id_sha256": hashlib.sha256(uid.encode("utf-8")).hexdigest()}
