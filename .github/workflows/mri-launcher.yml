@@ -27,6 +27,17 @@ jobs:
             $parseErrors | ForEach-Object { Write-Error $_.Message }
             exit 1
           }
+      - name: Parse launcher with legacy Windows PowerShell 5.1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path './start.ps1'), [ref]$tokens, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) {
+            $parseErrors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
   r-model:
     runs-on: ubuntu-latest
     steps:
