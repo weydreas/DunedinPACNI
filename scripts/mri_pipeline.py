@@ -36,6 +36,15 @@ def upscaler():
     return mod
 
 
+def recon_resumer():
+    """Import cross-platform FreeSurfer lock handling independently of data ROOT."""
+    path = Path(__file__).resolve().with_name("freesurfer_resume.py")
+    spec = importlib.util.spec_from_file_location("freesurfer_resume", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def synth_index(study):
     return upscaler().read_index(study)
 
@@ -305,46 +314,62 @@ def reconstruct(study, variant="original"):
     image = active_input(study, variant)
     check_license()
     check_docker()
-    meta = provenance(study, image, variant)
-    if completed(study, variant):
-        print("FreeSurfer already completed; reusing verified output.")
-        return
-
-    # Crucial invariant from the official FreeSurfer recon-all documentation:
-    # -i must be provided only when the subject directory DOES NOT EXIST.
-    # During resume, the already-imported 001.mgz is reused without -i.
-    record_provenance(study, image, meta, variant)
+    subject = subject_id(study, variant)
+    resume = recon_resumer()
     SUBJECTS.mkdir(parents=True, exist_ok=True)
-    recover_launcher_stub(study, variant)
-    folder = subject_dir(study, variant)
-    if folder.exists() and folder.is_symlink():
-        raise PipelineError("Refusing to use symlinked subject directory")
-    already_imported = (folder / "mri" / "orig" / "001.mgz").is_file()
-    if folder.exists() and not already_imported:
-        raise PipelineError(
-            "FreeSurfer subject directory exists but mri/orig/001.mgz is absent. "
-            "This is not a metadata-only stub; inspect the folder and "
-            "recon-all.log before deciding whether to reset it. "
-            "No files were deleted."
-        )
-    # For SynthSR the generated T1 lives in work/upscaled, not MRI/<study>.
-    # Both versions are the SAME acquisition; only their analysis workspaces differ.
-    input_folder = study if variant == "original" else image.parent
-    args = [
-        "docker", "run", "--rm",
-        "--mount", "type=bind,source=" + str(input_folder.resolve()) + ",target=/input,readonly",
-        "--mount", "type=bind,source=" + str(SUBJECTS.resolve()) + ",target=/subjects",
-        "--mount", "type=bind,source=" + str(LICENSE.resolve()) +
-        ",target=/opt/pacni-license.txt,readonly",
-        "-e", "SUBJECTS_DIR=/subjects", "-e", "FS_LICENSE=/opt/pacni-license.txt",
-        FS_IMAGE, "recon-all", "-sd", "/subjects", "-s", subject_id(study, variant)
-    ]
-    if not already_imported:
-        args.extend(["-i", "/input/" + image.relative_to(input_folder).as_posix()])
-    args.extend(["-all", "-parallel", "-openmp", str(min(os.cpu_count() or 2, 8))])
-    sh(args)
-    if not completed(study, variant):
-        raise PipelineError("FreeSurfer did not create recon-all.done; inspect recon-all.log")
+    try:
+        # An OS-managed lock is released even if the PowerShell window closes
+        # or Python crashes. FreeSurfer's own stale marker is treated separately.
+        with resume.subject_launch_guard(SUBJECTS, subject):
+            meta = provenance(study, image, variant)
+            if completed(study, variant):
+                print("FreeSurfer already completed; reusing verified output.")
+                return
+
+            # -i is valid ONLY for the initial import. Existing mri/orig/001.mgz
+            # and provenance allow us to reuse the incomplete reconstruction.
+            record_provenance(study, image, meta, variant)
+            recover_launcher_stub(study, variant)
+            folder = subject_dir(study, variant)
+            if folder.exists() and folder.is_symlink():
+                raise PipelineError("Refusing symlinked FreeSurfer subject directory")
+            already_imported = (folder / "mri" / "orig" / "001.mgz").is_file()
+            if folder.exists() and not already_imported:
+                raise PipelineError(
+                    "FreeSurfer subject exists but mri/orig/001.mgz is absent. "
+                    "Inspect recon-all.log before resetting it. Nothing was deleted."
+                )
+            if already_imported:
+                # The crashed Docker container may have left IsRunning.lh+rh.
+                # Only a verified, older marker with no other active FreeSurfer
+                # container can be cleared; all recon intermediates are kept.
+                resume.clear_stale_isrunning(folder, subject, SUBJECTS)
+                print("Resuming existing FreeSurfer subject using -make all.")
+            input_folder = study if variant == "original" else image.parent
+            args = [
+                "docker", "run", "--rm",
+                "--mount", "type=bind,source=" + str(input_folder.resolve()) +
+                           ",target=/input,readonly",
+                "--mount", "type=bind,source=" + str(SUBJECTS.resolve()) +
+                           ",target=/subjects",
+                "--mount", "type=bind,source=" + str(LICENSE.resolve()) +
+                           ",target=/opt/pacni-license.txt,readonly",
+                "-e", "SUBJECTS_DIR=/subjects", "-e", "FS_LICENSE=/opt/pacni-license.txt",
+                FS_IMAGE, "recon-all", "-sd", "/subjects", "-s", subject,
+            ]
+            if already_imported:
+                # FreeSurfer's documented interrupted-run recovery directive:
+                # reuse completed intermediates and run remaining required steps.
+                args.extend(["-make", "all"])
+            else:
+                args.extend(["-i", "/input/" + image.relative_to(input_folder).as_posix(),
+                             "-all"])
+            args.extend(["-parallel", "-openmp", str(min(os.cpu_count() or 2, 8))])
+            sh(args)
+            if not completed(study, variant):
+                raise PipelineError("FreeSurfer did not create recon-all.done; inspect recon-all.log")
+    except resume.ResumeError as error:
+        raise PipelineError(str(error)) from None
 
 def inspect(study, variant="original"):
     folder = subject_dir(study, variant)
