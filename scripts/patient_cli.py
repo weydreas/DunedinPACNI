@@ -39,6 +39,27 @@ def studies_json(patient):
     print(json.dumps(items, ensure_ascii=True))
 
 
+def studies_menu_json(patient):
+    """Stable JSON object contract for the interactive Windows MRI menu.
+
+    A named object rather than a bare JSON array avoids PowerShell pipeline
+    enumeration ambiguity for zero, one, or several attached studies. Keep
+    the existing 'studies' array contract unchanged for older consumers.
+    """
+    patient_id = reg.resolve_patient(patient)
+    studies = []
+    for root, study in reg.patient_studies(patient_id):
+        studies.append({
+            "name": study.name,
+            "root": str(root),
+            "patient_id": patient_id,
+            "storage_patient_id": root.parent.name if root != reg.LEGACY else "",
+            "legacy": root == reg.LEGACY,
+        })
+    print(json.dumps({"patient_id": patient_id, "count": len(studies),
+                      "studies": studies}, ensure_ascii=True))
+
+
 def compare_patient(patient):
     """Compare all *logical* patient studies, including merged physical roots.
 
@@ -126,7 +147,7 @@ def compare_patient(patient):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["menu", "create", "attach-legacy",
-                        "merge", "studies", "discover", "register-discovered", "compare"])
+                        "merge", "studies", "studies-menu", "discover", "register-discovered", "compare"])
     parser.add_argument("a", nargs="?")
     parser.add_argument("b", nargs="?")
     args = parser.parse_args()
@@ -144,6 +165,8 @@ def main():
         print("Patient identities linked. All study folders remain readable and unchanged.")
     elif args.command == "studies":
         studies_json(args.a)
+    elif args.command == "studies-menu":
+        studies_menu_json(args.a)
     elif args.command == "discover":
         print(json.dumps(reg.discover_local_patient_names(), ensure_ascii=True))
     elif args.command == "register-discovered":
