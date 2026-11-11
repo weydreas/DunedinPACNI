@@ -124,7 +124,7 @@ function Show-StudyMenu([object]$SelectedScan) {
                 '5' { Invoke-Pipeline 'score' $Study }
                 '6' { Invoke-Pipeline 'all' $Study }
                 '7' { Invoke-Pipeline 'list' $Study }
-                '8' { Invoke-Pipeline 'compare' $Study }
+                '8' { Invoke-PatientAction 'compare' ([string]$SelectedScan.patient_id) '' }
                 '9' { $ok = Invoke-LicenseSetup; Read-Host 'Press Enter to continue' | Out-Null }
                 '10' { Invoke-Pipeline 'report' $Study }
                 '11' { Invoke-Pipeline 'upscale' $Study }
