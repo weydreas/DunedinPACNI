@@ -149,8 +149,15 @@ function Show-PatientMenu([object]$SelectedPatient) {
         Write-Host "Patient: $($SelectedPatient.label)" -ForegroundColor Cyan
         $scans = @(Get-PatientScans $PatientId)
         for ($i = 0; $i -lt $scans.Count; $i++) {
-            $legacyNote = if ($scans[$i].legacy) { ' [legacy]' } else { '' }
-            Write-Host ("{0}. {1}{2}" -f ($i + 1), $scans[$i].name, $legacyNote)
+            $storage = [string]$scans[$i].storage_patient_id
+            $origin = if ($scans[$i].legacy) {
+                ' [original MRI root]'
+            } elseif ($storage -and $storage -ne $PatientId) {
+                ' [merged source ' + $storage.Substring(0, [Math]::Min(10, $storage.Length)) + ']'
+            } else {
+                ' [patient storage]'
+            }
+            Write-Host ("{0}. {1}{2}" -f ($i + 1), $scans[$i].name, $origin)
         }
         Write-Host 'M. Merge with another patient (persistent aliases, no file deletion)'
         Write-Host 'C. Import a selected DICOM series from a public cloud link'
