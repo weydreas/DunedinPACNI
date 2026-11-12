@@ -364,7 +364,16 @@ def reconstruct(study, variant="original"):
             else:
                 args.extend(["-i", "/input/" + image.relative_to(input_folder).as_posix(),
                              "-all"])
-            args.extend(["-parallel", "-openmp", str(min(os.cpu_count() or 2, 8))])
+            if already_imported:
+                # Recovery runs one hemisphere at a time with one CPU thread.
+                # Parallel topology correction failed with SIGSEGV for a
+                # previously interrupted SynthSR subject. Conservative
+                # scheduling reduces resource pressure, not the anatomical
+                # uncertainty of synthetic MRI or all algorithm crash causes.
+                args.extend(["-openmp", "1"])
+                print("Recovery mode: serial FreeSurfer, one OpenMP thread.")
+            else:
+                args.extend(["-parallel", "-openmp", str(min(os.cpu_count() or 2, 8))])
             sh(args)
             if not completed(study, variant):
                 raise PipelineError("FreeSurfer did not create recon-all.done; inspect recon-all.log")
