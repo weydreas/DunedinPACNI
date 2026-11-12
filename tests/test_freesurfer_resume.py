@@ -190,6 +190,8 @@ class CrashResumeTests(unittest.TestCase):
         self.assertIn("-make",calls[0])
         self.assertIn("all",calls[0])
         self.assertNotIn("-i",calls[0])
+        self.assertNotIn("-parallel",calls[0])
+        self.assertEqual(calls[0][calls[0].index("-openmp") + 1], "1")
         self.assertEqual((self.folder/"scripts"/"recon-all.log").read_bytes(),original_log)
         self.assertTrue((self.folder/"surf"/"lh.white").exists())
         self.assertTrue((self.folder/"scripts"/"recon-all.done").exists())
