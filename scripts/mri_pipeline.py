@@ -344,7 +344,7 @@ def reconstruct(study, variant="original"):
                 # Only a verified, older marker with no other active FreeSurfer
                 # container can be cleared; all recon intermediates are kept.
                 resume.clear_stale_isrunning(folder, subject, SUBJECTS)
-                print("Resuming existing FreeSurfer subject using -make all.")
+                print("Resuming existing FreeSurfer subject using -all (FreeSurfer 7.4.1).")
             input_folder = study if variant == "original" else image.parent
             args = [
                 "docker", "run", "--rm",
@@ -358,9 +358,11 @@ def reconstruct(study, variant="original"):
                 FS_IMAGE, "recon-all", "-sd", "/subjects", "-s", subject,
             ]
             if already_imported:
-                # FreeSurfer's documented interrupted-run recovery directive:
-                # reuse completed intermediates and run remaining required steps.
-                args.extend(["-make", "all"])
+                # FreeSurfer 7.4.1 explicitly rejects "-make" as unsupported.
+                # "-all" with no "-i" reuses the existing subject/import and
+                # runs the required reconstruction stages without reimporting.
+                # Keep serial one-thread recovery below after the topology crash.
+                args.append("-all")
             else:
                 args.extend(["-i", "/input/" + image.relative_to(input_folder).as_posix(),
                              "-all"])
