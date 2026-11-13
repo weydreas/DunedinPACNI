@@ -612,7 +612,11 @@ Markers are cleared only if sufficiently old, securely readable and owned
 by this same subject, with no active FreeSurfer container. It preserves
 `mri/orig/001.mgz`, FreeSurfer logs, recon intermediates, source images,
 derived SynthSR outputs, prior PACNI results and other patients' folders.
-The rest of the reconstruction uses `recon-all -make all` without `-i`.
+FreeSurfer 7.4.1 rejects legacy `-make all` with the message `-make is no longer supported`.
+Recovery therefore invokes the supported `recon-all -all -openmp 1` directive,
+without `-i` or `-parallel`, preserving imported `001.mgz` and reconstruction
+intermediates. If a previously failed topology step crashes again, retain
+`mris_fix_topology_lh.cmd.log` and `mris_fix_topology_rh.cmd.log` for review.
 
 Fresh, malformed, symlinked, foreign or actively owned locks, unavailable
 Docker inspection and concurrent launcher attempts all stop safely.
