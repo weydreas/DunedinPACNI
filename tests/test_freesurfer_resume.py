@@ -158,7 +158,7 @@ class CrashResumeTests(unittest.TestCase):
         with resume.subject_launch_guard(self.subjects,self.subject_id):
             pass
 
-    def test_reconstruct_resume_runs_make_all_and_never_reimports(self):
+    def test_reconstruct_resume_uses_supported_all_and_never_reimports(self):
         study=self.root/"MRI"/"2018 SYNTHETIC"
         study.mkdir(parents=True)
         image=study/"T1.nii.gz"
@@ -187,8 +187,10 @@ class CrashResumeTests(unittest.TestCase):
             self.marker()
             pipeline.reconstruct(study,"synthsr")
         self.assertEqual(len(calls),1)
-        self.assertIn("-make",calls[0])
-        self.assertIn("all",calls[0])
+        # FS 7.4.1 returns "ERROR: -make is no longer supported".
+        # A resumed, already-imported subject must use the supported -all.
+        self.assertIn("-all",calls[0])
+        self.assertNotIn("-make",calls[0])
         self.assertNotIn("-i",calls[0])
         self.assertNotIn("-parallel",calls[0])
         self.assertEqual(calls[0][calls[0].index("-openmp") + 1], "1")
